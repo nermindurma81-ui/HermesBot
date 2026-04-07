@@ -52,6 +52,23 @@ def _market_catalog():
     }
 
 
+def _collect_chat_reply(messages, cfg) -> str:
+    """Non-stream helper za kanale poput Telegram webhooka."""
+    chunks = []
+    for chunk in chat_stream(messages, cfg):
+        if not chunk.startswith("data: "):
+            continue
+        try:
+            payload = json.loads(chunk[6:].strip())
+        except Exception:
+            continue
+        if payload.get("content"):
+            chunks.append(payload["content"])
+        if payload.get("tool_result") and not payload.get("content"):
+            chunks.append(str(payload["tool_result"]))
+    return "".join(chunks).strip() or "✅"
+
+
 def _extract_file_preview(path, ext: str) -> str:
     ext = (ext or "").lower()
     if ext in {".txt", ".md", ".json", ".csv", ".py", ".log"}:
@@ -137,6 +154,62 @@ def api_telegram_status():
         return jsonify({"ok": bool(me.get("ok")), "me": me.get("result"), "webhook": webhook.get("result")})
     except Exception as e:
         return jsonify({"ok": False, "status": "error", "error": str(e)}), 400
+
+
+@app.route("/api/connectors/telegram/webhook/set", methods=["POST"])
+def api_telegram_webhook_set():
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return jsonify({"ok": False, "status": "missing_token"}), 400
+
+    data = request.json or {}
+    public_url = (data.get("public_url") or "").strip().rstrip("/")
+    if not public_url:
+        public_url = request.host_url.rstrip("/")
+    webhook_url = f"{public_url}/api/telegram/webhook"
+
+    try:
+        import httpx
+        resp = httpx.post(
+            f"https://api.telegram.org/bot{token}/setWebhook",
+            json={"url": webhook_url, "drop_pending_updates": False},
+            timeout=15
+        )
+        body = resp.json()
+        return jsonify({"ok": body.get("ok", False), "webhook_url": webhook_url, "telegram": body})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "webhook_url": webhook_url}), 400
+
+
+@app.route("/api/telegram/webhook", methods=["POST"])
+def api_telegram_webhook():
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return jsonify({"ok": False, "status": "missing_token"}), 400
+
+    update = request.json or {}
+    msg = update.get("message") or update.get("edited_message") or {}
+    chat = msg.get("chat") or {}
+    chat_id = chat.get("id")
+    text = (msg.get("text") or "").strip()
+    if not chat_id or not text:
+        return jsonify({"ok": True, "ignored": True})
+
+    cfg = get_cfg()
+    reply = _collect_chat_reply([{"role": "user", "content": text}], cfg)
+
+    try:
+        import httpx
+        httpx.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": reply[:4000]},
+            timeout=15
+        )
+    except Exception:
+        # Telegram retry-a webhook; vrati 200 da ne blokira petlju
+        return jsonify({"ok": True, "sent": False})
+
+    return jsonify({"ok": True, "sent": True})
 
 
 @app.route("/api/connectors/github/status", methods=["GET"])

@@ -575,6 +575,7 @@ body{
           <div style="display:flex;gap:8px">
             <button class="btn btn-primary btn-full" onclick="saveTelegram()">💾 Postavi token</button>
             <button class="btn btn-secondary" onclick="checkTelegramStatus()">🩺 Test</button>
+            <button class="btn btn-secondary" onclick="setTelegramWebhook()">🔗 Webhook</button>
           </div>
           <div class="hint" id="tgStatusText" style="margin-top:8px"></div>
         </div>
@@ -1400,6 +1401,26 @@ async function checkTelegramStatus() {
       document.getElementById('tgBadge').textContent = '● issue';
       document.getElementById('tgBadge').className = 'badge red';
       el.textContent = `❌ ${d.status || d.error || 'Telegram nije povezan'}`;
+    }
+  } catch(e) {
+    el.textContent = `❌ ${e.message}`;
+  }
+}
+
+async function setTelegramWebhook() {
+  const el = document.getElementById('tgStatusText');
+  el.textContent = 'Postavljam webhook...';
+  try {
+    const r = await fetch('/api/connectors/telegram/webhook/set', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({})
+    });
+    const d = await r.json();
+    if(d.ok) {
+      el.textContent = `✅ Webhook postavljen: ${d.webhook_url}`;
+    } else {
+      el.textContent = `❌ ${d.error || d.status || 'setWebhook failed'}`;
     }
   } catch(e) {
     el.textContent = `❌ ${e.message}`;

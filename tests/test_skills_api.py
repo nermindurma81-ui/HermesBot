@@ -49,6 +49,10 @@ def test_connectors_status_endpoints_without_tokens():
     assert tg.get_json()["status"] == "missing_token"
     assert gh.get_json()["status"] == "missing_token"
 
+    tg_set = client.post("/api/connectors/telegram/webhook/set", json={})
+    assert tg_set.status_code == 400
+    assert tg_set.get_json()["status"] == "missing_token"
+
 
 def test_skill_command_requires_params():
     orchestrator = HermesOrchestrator()
@@ -90,3 +94,11 @@ def test_deep_sanity_script():
     )
     assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
     assert "DEEP_SANITY_OK" in proc.stdout
+
+
+def test_telegram_webhook_ignored_without_text(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x:dummy")
+    client = app.test_client()
+    r = client.post("/api/telegram/webhook", json={"message": {"chat": {"id": 1}}})
+    assert r.status_code == 200
+    assert r.get_json()["ignored"] is True
