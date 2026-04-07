@@ -218,6 +218,7 @@ def chat_stream(messages: list, cfg: dict) -> Iterator[str]:
         with httpx.Client(timeout=120) as client:
             with client.stream("POST", f"{host}/api/chat", json=payload) as resp:
                 if resp.status_code != 200:
+                    resp.read()  # ✅ POPRAVAK: mora se pozvati read() prije .text na streaming response
                     body = resp.text
                     yield f"data: {json.dumps({'error': f'Ollama {resp.status_code}: {body}', 'done': True})}\n\n"
                     return
