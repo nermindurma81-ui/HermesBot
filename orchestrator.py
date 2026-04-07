@@ -90,6 +90,9 @@ class HermesOrchestrator:
         if "openclaw" in low and "openclaw_skills" in self.list_python_skills():
             return ("openclaw_skills", self.execute_skill("openclaw_skills", 'action="categories"'))
 
+        if any(k in low for k in ["nađi", "nadji", "pretrazi", "pretraži", "search"]) and "web_search" in self.list_python_skills():
+            return ("web_search", self.execute_skill("web_search", f'query="{text}"'))
+
         # Hard rule: vrijeme ide direktno preko weather skilla (ako postoji lokacija)
         loc = self._extract_weather_location(text)
         if loc and "weather" in self.list_python_skills():

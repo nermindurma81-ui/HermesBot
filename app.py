@@ -51,6 +51,47 @@ def _market_catalog():
         ]
     }
 
+
+def _extract_file_preview(path, ext: str) -> str:
+    ext = (ext or "").lower()
+    if ext in {".txt", ".md", ".json", ".csv", ".py", ".log"}:
+        return path.read_text(encoding="utf-8", errors="ignore")[:4000]
+
+    if ext == ".pdf":
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(str(path))
+            text = "\n".join((p.extract_text() or "") for p in reader.pages[:5])
+            return text[:4000]
+        except Exception:
+            return ""
+
+    if ext == ".docx":
+        try:
+            import docx  # python-docx
+            d = docx.Document(str(path))
+            text = "\n".join(p.text for p in d.paragraphs)
+            return text[:4000]
+        except Exception:
+            return ""
+
+    if ext == ".xlsx":
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(str(path), data_only=True, read_only=True)
+            lines = []
+            for ws in wb.worksheets[:2]:
+                lines.append(f"[Sheet] {ws.title}")
+                for row in ws.iter_rows(min_row=1, max_row=20, values_only=True):
+                    vals = [str(v) for v in row if v is not None and str(v).strip()]
+                    if vals:
+                        lines.append(" | ".join(vals))
+            return "\n".join(lines)[:4000]
+        except Exception:
+            return ""
+
+    return ""
+
 # ─────────────────────────────────────────────────────────────────
 # PAGES
 # ─────────────────────────────────────────────────────────────────
@@ -74,9 +115,7 @@ def api_chat_upload():
     f.save(target)
 
     size = target.stat().st_size
-    preview = ""
-    if ext.lower() in {".txt", ".md", ".json", ".csv", ".py", ".log"}:
-        preview = target.read_text(encoding="utf-8", errors="ignore")[:4000]
+    preview = _extract_file_preview(target, ext)
 
     return jsonify({
         "ok": True,
@@ -84,6 +123,44 @@ def api_chat_upload():
         "size": size,
         "preview": preview
     })
+
+
+@app.route("/api/connectors/telegram/status", methods=["GET"])
+def api_telegram_status():
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return jsonify({"ok": False, "status": "missing_token"})
+    try:
+        import httpx
+        me = httpx.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10).json()
+        webhook = httpx.get(f"https://api.telegram.org/bot{token}/getWebhookInfo", timeout=10).json()
+        return jsonify({"ok": bool(me.get("ok")), "me": me.get("result"), "webhook": webhook.get("result")})
+    except Exception as e:
+        return jsonify({"ok": False, "status": "error", "error": str(e)}), 400
+
+
+@app.route("/api/connectors/github/status", methods=["GET"])
+def api_github_status():
+    token = (request.headers.get("Authorization", "").replace("Bearer ", "").strip()
+             or os.environ.get("GITHUB_TOKEN", "").strip())
+    if not token:
+        return jsonify({"ok": False, "status": "missing_token"})
+    try:
+        import httpx
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+        user = httpx.get("https://api.github.com/user", headers=headers, timeout=10)
+        repos = httpx.get("https://api.github.com/user/repos?per_page=30&sort=updated", headers=headers, timeout=10)
+        if user.status_code != 200:
+            return jsonify({"ok": False, "status": "auth_failed", "code": user.status_code, "body": user.text[:300]}), 400
+        repos_data = repos.json() if repos.status_code == 200 else []
+        return jsonify({
+            "ok": True,
+            "user": user.json().get("login"),
+            "repo_count": len(repos_data),
+            "repos": [r.get("full_name") for r in repos_data[:20]]
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "status": "error", "error": str(e)}), 400
 
 # ─────────────────────────────────────────────────────────────────
 # CONFIG API

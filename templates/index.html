@@ -482,6 +482,7 @@ body{
         <button class="conn-tab active" onclick="switchConnTab('ollama',this)">Ollama</button>
         <button class="conn-tab" onclick="switchConnTab('telegram',this)">Telegram</button>
         <button class="conn-tab" onclick="switchConnTab('discord',this)">Discord</button>
+        <button class="conn-tab" onclick="switchConnTab('github',this)">GitHub</button>
         <button class="conn-tab" onclick="switchConnTab('hermes',this)">Hermes</button>
       </div>
 
@@ -571,7 +572,11 @@ body{
             4. Redeployaj → bot je aktivan<br>
             5. Pošalji /start svom botu
           </div>
-          <button class="btn btn-primary btn-full" onclick="saveTelegram()">💾 Postavi token</button>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary btn-full" onclick="saveTelegram()">💾 Postavi token</button>
+            <button class="btn btn-secondary" onclick="checkTelegramStatus()">🩺 Test</button>
+          </div>
+          <div class="hint" id="tgStatusText" style="margin-top:8px"></div>
         </div>
         <div class="card">
           <div class="card-title" style="margin-bottom:8px">Telegram Komande</div>
@@ -612,6 +617,29 @@ body{
             5. Postavi DISCORD_BOT_TOKEN na Railway
           </div>
           <button class="btn btn-primary btn-full" onclick="saveDiscord()">💾 Postavi token</button>
+        </div>
+      </div>
+
+      <!-- GitHub -->
+      <div class="conn-pane" id="conn-github">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-icon">🐙</div>
+            <div style="flex:1">
+              <div class="card-title">GitHub Connector</div>
+              <div class="card-desc">Provjera PAT tokena i lista repozitorija</div>
+            </div>
+            <span class="badge" id="ghBadge" style="background:var(--bg3);color:var(--muted)">not set</span>
+          </div>
+          <div class="form-group">
+            <div class="form-label">Env/Header: GITHUB_TOKEN</div>
+            <input class="form-input" id="ghTokenInput" type="password"
+              placeholder="ghp_..." style="font-family:var(--mono);font-size:12px">
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary" onclick="checkGithubStatus()">🩺 Test GitHub</button>
+          </div>
+          <div class="hint" id="ghStatusText" style="margin-top:8px"></div>
         </div>
       </div>
 
@@ -1358,6 +1386,26 @@ function saveTelegram() {
   toast('Postavi TELEGRAM_BOT_TOKEN=' + token.substring(0,10) + '... u Railway env vars');
 }
 
+async function checkTelegramStatus() {
+  const el = document.getElementById('tgStatusText');
+  el.textContent = 'Provjeravam Telegram...';
+  try {
+    const r = await fetch('/api/connectors/telegram/status');
+    const d = await r.json();
+    if(d.ok) {
+      document.getElementById('tgBadge').textContent = '● connected';
+      document.getElementById('tgBadge').className = 'badge green';
+      el.textContent = `✅ @${d.me?.username || 'bot'} webhook: ${d.webhook?.url || '(none)'}`;
+    } else {
+      document.getElementById('tgBadge').textContent = '● issue';
+      document.getElementById('tgBadge').className = 'badge red';
+      el.textContent = `❌ ${d.status || d.error || 'Telegram nije povezan'}`;
+    }
+  } catch(e) {
+    el.textContent = `❌ ${e.message}`;
+  }
+}
+
 function saveDiscord() {
   const token = document.getElementById('dcTokenInput').value.trim();
   if(!token) { toast('Unesi Discord token'); return; }
@@ -1365,6 +1413,29 @@ function saveDiscord() {
   badge.textContent = '● set';
   badge.className = 'badge green';
   toast('Postavi DISCORD_BOT_TOKEN u Railway env vars');
+}
+
+async function checkGithubStatus() {
+  const token = document.getElementById('ghTokenInput').value.trim();
+  const el = document.getElementById('ghStatusText');
+  el.textContent = 'Provjeravam GitHub...';
+  try {
+    const r = await fetch('/api/connectors/github/status', {
+      headers: token ? {'Authorization': `Bearer ${token}`} : {}
+    });
+    const d = await r.json();
+    if(d.ok) {
+      document.getElementById('ghBadge').textContent = '● connected';
+      document.getElementById('ghBadge').className = 'badge green';
+      el.textContent = `✅ ${d.user} · repo count: ${d.repo_count}`;
+    } else {
+      document.getElementById('ghBadge').textContent = '● issue';
+      document.getElementById('ghBadge').className = 'badge red';
+      el.textContent = `❌ ${d.status || d.error || 'auth failed'}`;
+    }
+  } catch(e) {
+    el.textContent = `❌ ${e.message}`;
+  }
 }
 
 // ── TAB NAVIGATION ───────────────────────────────────────────────

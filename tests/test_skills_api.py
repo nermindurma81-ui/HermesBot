@@ -37,3 +37,13 @@ def test_explicit_skill_command_format():
     tool, output = orchestrator.detect_intent_and_execute('/skill hello name="Nermin"')
     assert tool == "hello"
     assert "Nermin" in output
+
+
+def test_connectors_status_endpoints_without_tokens():
+    client = app.test_client()
+    tg = client.get("/api/connectors/telegram/status")
+    gh = client.get("/api/connectors/github/status")
+    assert tg.status_code == 200
+    assert gh.status_code == 200
+    assert tg.get_json()["status"] == "missing_token"
+    assert gh.get_json()["status"] == "missing_token"
