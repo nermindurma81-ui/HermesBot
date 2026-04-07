@@ -77,6 +77,9 @@ class HermesOrchestrator:
                 return ("list_skills", "Nema dostupnih Python skillova.")
             return ("list_skills", "Dostupni Python skillovi: " + ", ".join(skills))
 
+        if "openclaw" in low and "openclaw_skills" in self.list_python_skills():
+            return ("openclaw_skills", self.execute_skill("openclaw_skills", 'action="categories"'))
+
         # Hard rule: vrijeme ide direktno preko weather skilla (ako postoji lokacija)
         loc = self._extract_weather_location(text)
         if loc and "weather" in self.list_python_skills():
