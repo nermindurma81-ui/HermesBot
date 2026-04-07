@@ -91,6 +91,9 @@ ollama run hf.co/tvoj-user/privatni-model-GGUF
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama URL |
 | `HF_MODEL` | `bartowski/Llama-3.2-1B-Instruct-GGUF` | HF model repo |
 | `HF_QUANT` | `Q4_K_M` | Kvantizacija |
+| `HF_SPACE_BASE_URL` | — | Opcionalni fallback endpoint (OpenAI-compatible `/v1/chat/completions`) |
+| `HF_SPACE_API_KEY` | — | Opcionalni Bearer token za privatni HF Space |
+| `HF_SPACE_MODEL` | `default` | Model ime koje se šalje HF Space endpointu |
 | `BOT_NAME` | `HermesBot` | Ime bota |
 | `SYSTEM_PROMPT` | `You are Hermes...` | System prompt |
 | `MEMORY_ENABLED` | `true` | Memorija on/off |
@@ -121,6 +124,16 @@ hermesbot/
 ├── railway.json
 └── .env.example
 ```
+
+## Dual backend (Ollama + HF Space fallback)
+
+Ako želiš da radi i druga opcija bez izmjene frontenda:
+
+1. Ostavi postojeći `OLLAMA_HOST`.
+2. Dodaj `HF_SPACE_BASE_URL=https://<tvoj-space>.hf.space`
+3. Opcionalno: `HF_SPACE_API_KEY=...` i `HF_SPACE_MODEL=...`
+
+Hermes prvo pokušava Ollama; ako Ollama nije dostupan, automatski prelazi na HF Space `/v1/chat/completions`.
 
 ## Licenca
 MIT

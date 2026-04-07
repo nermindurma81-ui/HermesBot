@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import app, _detect_public_base_url
 from orchestrator import HermesOrchestrator
+import hermes_core.agent as agent_module
 
 
 def test_skills_market_and_python_listing():
@@ -165,3 +166,46 @@ def test_skill_save_python_and_reject_invalid_python():
     assert loaded.get_json()["type"] == "python"
 
     client.delete("/api/skills/tmp_exec_skill")
+
+
+def test_chat_stream_falls_back_to_hf_space(monkeypatch):
+    cfg = agent_module.get_cfg()
+    cfg["ollama_host"] = "http://127.0.0.1:65531"
+    cfg["hf_space_base_url"] = "https://example-space.hf.space"
+    cfg["hf_space_model"] = "test-model"
+    cfg["hf_space_api_key"] = ""
+
+    class _FakeStreamCtx:
+        def __enter__(self):
+            raise agent_module.httpx.ConnectError("offline")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, *args, **kwargs):
+            return _FakeStreamCtx()
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"choices": [{"message": {"content": "HF fallback radi"}}]}
+
+    monkeypatch.setattr(agent_module.httpx, "Client", _FakeClient)
+    monkeypatch.setattr(agent_module.httpx, "post", lambda *a, **k: _Resp())
+
+    chunks = list(agent_module.chat_stream([{"role": "user", "content": "test"}], cfg))
+    text = "".join(chunks)
+    assert "HF fallback radi" in text
+    assert '"done": true' in text.lower()

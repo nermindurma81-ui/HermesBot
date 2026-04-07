@@ -32,6 +32,9 @@ def get_cfg():
         "ollama_host":    os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
         "hf_model":       os.environ.get("HF_MODEL", "bartowski/Llama-3.2-1B-Instruct-GGUF"),
         "hf_quant":       os.environ.get("HF_QUANT", "Q4_K_M"),
+        "hf_space_base_url": os.environ.get("HF_SPACE_BASE_URL", "").strip(),
+        "hf_space_api_key": os.environ.get("HF_SPACE_API_KEY", "").strip(),
+        "hf_space_model": os.environ.get("HF_SPACE_MODEL", "").strip(),
         "system_prompt":  os.environ.get("SYSTEM_PROMPT",
             "You are Hermes, a self-improving AI assistant. Be precise, helpful, and concise."),
         "bot_name":       os.environ.get("BOT_NAME", "Hermes"),
@@ -213,6 +216,40 @@ Call them when appropriate by emitting a JSON tool_call block.
 {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
 """
 
+
+def _chat_via_hf_space(messages: list, cfg: dict) -> Iterator[str]:
+    base_url = (cfg.get("hf_space_base_url") or "").rstrip("/")
+    if not base_url:
+        yield f"data: {json.dumps({'error': 'Ollama nedostupan, a HF_SPACE_BASE_URL nije postavljen.', 'done': True})}\n\n"
+        return
+
+    endpoint = f"{base_url}/v1/chat/completions"
+    system = build_system(cfg)
+    model = cfg.get("hf_space_model") or "default"
+    headers = {"Content-Type": "application/json"}
+    if cfg.get("hf_space_api_key"):
+        headers["Authorization"] = f"Bearer {cfg['hf_space_api_key']}"
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}] + messages[-cfg["max_context"]:]
+    }
+
+    try:
+        resp = httpx.post(endpoint, json=payload, headers=headers, timeout=120)
+        if resp.status_code != 200:
+            body = resp.text[:500]
+            yield f"data: {json.dumps({'error': f'HF Space {resp.status_code}: {body}', 'done': True})}\n\n"
+            return
+
+        data = resp.json()
+        content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
+        if content:
+            yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
+        yield f"data: {json.dumps({'done': True})}\n\n"
+    except Exception as e:
+        yield f"data: {json.dumps({'error': f'HF Space fallback error: {e}', 'done': True})}\n\n"
+
 # ── OLLAMA STREAMING CHAT ─────────────────────────────────────────
 def chat_stream(messages: list, cfg: dict) -> Iterator[str]:
     """Stream chat response from Ollama, handling tool calls."""
@@ -303,7 +340,8 @@ def chat_stream(messages: list, cfg: dict) -> Iterator[str]:
                         return
 
     except httpx.ConnectError:
-        yield f"data: {json.dumps({'error': f'Cannot connect to Ollama at {host}. Is it running?', 'done': True})}\n\n"
+        # Fallback: ako je podešen HF Space endpoint, nastavi tamo bez izmjene frontenda.
+        yield from _chat_via_hf_space(messages, cfg)
     except Exception as e:
         yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
 
