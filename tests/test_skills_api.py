@@ -59,11 +59,11 @@ def test_connectors_status_endpoints_without_tokens():
     assert tg_set.get_json()["status"] == "missing_token"
 
 
-def test_skill_command_requires_params():
+def test_skill_command_without_params_runs_if_optional():
     orchestrator = HermesOrchestrator()
     tool, output = orchestrator.detect_intent_and_execute('/skill web_search')
-    assert tool == "skill_error"
-    assert "Nedostaju parametri" in output
+    assert tool == "web_search"
+    assert isinstance(output, str)
 
 
 def test_auto_router_prefers_web_search_for_lookup_queries():
@@ -328,3 +328,17 @@ def test_skills_installed_includes_skill_packs(monkeypatch):
     payload = client.get("/api/skills/installed").get_json()
     names = {s["name"] for s in payload["skills"]}
     assert "pack_demo" in names
+
+
+def test_natural_language_install_skill_command():
+    orchestrator = HermesOrchestrator()
+    tool, output = orchestrator.detect_intent_and_execute("Molim te instaliraj skill web_search")
+    assert tool == "install_skill"
+    assert "web_search" in output
+
+
+def test_explicit_skill_without_required_params_can_run():
+    orchestrator = HermesOrchestrator()
+    tool, output = orchestrator.detect_intent_and_execute("/skill hello")
+    assert tool == "hello"
+    assert "Zdravo" in output or "Hello" in output

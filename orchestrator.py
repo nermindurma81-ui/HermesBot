@@ -172,6 +172,24 @@ class HermesOrchestrator:
                 return f"⚠️ Ne mogu pročitati '{wanted}': {e}"
         return f"❌ Skill '{raw_name}' nije pronađen."
 
+    def _required_params_for_skill(self, skill_name: str):
+        file_path = os.path.join(self.skills_dir, f"{skill_name}.py")
+        if not os.path.exists(file_path):
+            return None
+        try:
+            spec = importlib.util.spec_from_file_location(skill_name, file_path)
+            skill_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(skill_module)
+            if not hasattr(skill_module, "run"):
+                return None
+            sig = inspect.signature(skill_module.run)
+            return [
+                name for name, p in sig.parameters.items()
+                if p.default is inspect._empty and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+            ]
+        except Exception:
+            return None
+
     def _extract_weather_location(self, text: str):
         # Primjeri: "kakvo je vrijeme u Splitu", "weather in Paris"
         m = re.search(r"(?:vrijeme|weather)\s+(?:u|za|in)\s+([A-Za-zČĆŽŠĐčćžšđ\-\s]+)\??", text, re.IGNORECASE)
@@ -184,8 +202,8 @@ class HermesOrchestrator:
         text = (user_text or "").strip()
         low = text.lower()
 
-        # Eksplicitna komanda: /install skill <ime>
-        m_install = re.match(r"^/?install\s+skill\s+(.+)$", low, re.IGNORECASE)
+        # Eksplicitna i prirodna komanda: /install skill <ime> | instaliraj skill <ime>
+        m_install = re.search(r"(?:^|[\s,;:])(?:/?install|instaliraj|dodaj|ubaci)\s+skill\s+([a-zA-Z0-9_\-]+)", low, re.IGNORECASE)
         if m_install:
             requested = m_install.group(1).strip()
             return ("install_skill", self._install_skill_pack(requested))
@@ -220,7 +238,12 @@ class HermesOrchestrator:
             skill_name = parts[0].strip()
             params_str = parts[1].strip() if len(parts) > 1 else ""
             if not params_str:
-                return ("skill_error", f"❌ Nedostaju parametri za skill '{skill_name}'. Primjer: /skill {skill_name} query=\"...\"")
+                required = self._required_params_for_skill(skill_name)
+                if required is None:
+                    return ("skill_error", f"❌ Skill '{skill_name}' nije pronađen.")
+                if required:
+                    return ("skill_error", f"❌ Nedostaju parametri za skill '{skill_name}'. Primjer: /skill {skill_name} query=\"...\"")
+                return (skill_name, self.execute_skill(skill_name, ""))
             return (skill_name, self.execute_skill(skill_name, params_str))
 
         # Hard rule: ako korisnik traži skillove, vrati listu postojećih Python skillova.
