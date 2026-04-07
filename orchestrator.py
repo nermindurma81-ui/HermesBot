@@ -145,6 +145,33 @@ class HermesOrchestrator:
             "Za listu dostupnih koristi: `Komande za skills`."
         )
 
+    def _skills_help(self):
+        return (
+            "🧠 Komande za skills:\n"
+            "- `/skills` ili `Komande za skills` → pomoć\n"
+            "- `/skills list` → lista dostupnih Python skillova\n"
+            "- `/skills read <ime>` → usage/info za skill\n"
+            "- `/install skill <ime>` → provjera/instalacija skilla\n"
+            "- `Use skill <ime>` → pokaži kako da pokreneš skill\n"
+            "- `/skill <ime> param=\"vrijednost\"` → izvrši skill direktno"
+        )
+
+    def _read_skill_info(self, raw_name: str):
+        wanted = (raw_name or "").strip().lower().replace("-", "_")
+        if not wanted:
+            return "❌ Napiši ime skilla. Primjer: /skills read web_search"
+        if wanted in self.list_python_skills():
+            hint = self._skill_signature_hint(wanted) or f"/skill {wanted} query=\"...\""
+            return f"📘 Skill '{wanted}'\nPokretanje: {hint}"
+        skill_pack = Path(self.skills_dir) / wanted / "SKILL.md"
+        if skill_pack.exists():
+            try:
+                preview = skill_pack.read_text(encoding="utf-8")[:800]
+                return f"📘 SKILL pack '{wanted}'\n{preview}"
+            except Exception as e:
+                return f"⚠️ Ne mogu pročitati '{wanted}': {e}"
+        return f"❌ Skill '{raw_name}' nije pronađen."
+
     def _extract_weather_location(self, text: str):
         # Primjeri: "kakvo je vrijeme u Splitu", "weather in Paris"
         m = re.search(r"(?:vrijeme|weather)\s+(?:u|za|in)\s+([A-Za-zČĆŽŠĐčćžšđ\-\s]+)\??", text, re.IGNORECASE)
@@ -162,6 +189,18 @@ class HermesOrchestrator:
         if m_install:
             requested = m_install.group(1).strip()
             return ("install_skill", self._install_skill_pack(requested))
+
+        # Jednostavne slash komande: /skills, /skills list, /skills read <ime>, /skills help
+        if low in {"/skills", "skills", "komande za skills", "komande skill", "/skills help"}:
+            return ("skills_help", self._skills_help())
+        m_skills_read = re.match(r"^/skills\s+read\s+(.+)$", low, re.IGNORECASE)
+        if m_skills_read:
+            return ("read_skill", self._read_skill_info(m_skills_read.group(1)))
+        if low == "/skills list":
+            skills = self.list_python_skills()
+            if not skills:
+                return ("list_skills", "Nema dostupnih Python skillova.")
+            return ("list_skills", "Dostupni Python skillovi:\n- " + "\n- ".join(skills))
 
         # Eksplicitna komanda: "use skill <ime>" ili "skill <ime>" -> ne šalji na web_search
         m_use = re.match(r"^(?:use\s+skill|skill)\s+([a-zA-Z0-9_\-]+)$", low, re.IGNORECASE)

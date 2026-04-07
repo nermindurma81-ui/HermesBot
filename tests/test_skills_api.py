@@ -281,3 +281,18 @@ def test_use_skill_command_returns_usage_hint():
     tool, output = orchestrator.detect_intent_and_execute("Use skill web_search")
     assert tool == "skill_help"
     assert "/skill web_search" in output
+
+
+def test_skills_help_command_returns_quick_commands():
+    orchestrator = HermesOrchestrator()
+    tool, output = orchestrator.detect_intent_and_execute("/skills")
+    assert tool == "skills_help"
+    assert "/skills list" in output
+    assert "/install skill <ime>" in output
+
+
+def test_skills_read_command_returns_skill_info():
+    orchestrator = HermesOrchestrator()
+    tool, output = orchestrator.detect_intent_and_execute("/skills read web_search")
+    assert tool == "read_skill"
+    assert "web_search" in output
