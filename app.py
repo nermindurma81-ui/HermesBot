@@ -2,27 +2,18 @@ from flask import Flask, render_template, request, jsonify
 import os
 import sys
 import logging
-import json
-import requests
-from telegram_bot import telegram_bp, telegram_bot
 
-# Add hermes_core to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from hermes_core.agent import HermesAgent
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Flask app
 app = Flask(__name__)
 
-# Register Telegram blueprint
-app.register_blueprint(telegram_bp, url_prefix='/telegram')
-
 # Config
-PORT = int(os.environ.get("PORT", 7860))
+PORT = int(os.environ.get("PORT", 5000))
 HF_MODEL = os.environ.get("HF_MODEL", 'bartowski/Llama-3.2-1B-Instruct-GGUF')
 HF_QUANT = os.environ.get("HF_QUANT", 'Q4_K_M')
 BOT_NAME = os.environ.get("BOT_NAME", 'Hermes')
@@ -46,26 +37,8 @@ def chat():
     
     def generate():
         try:
-            # Direct Ollama streaming
-            ollama_url = 'http://localhost:11434/api/generate'
-            
-            payload = {
-                'model': f'hf.co/{HF_MODEL}:{HF_QUANT}',
-                'prompt': message,
-                'stream': True
-            }
-            
-            response = requests.post(ollama_url, json=payload, stream=True)
-            
-            for line in response.iter_lines():
-                if line:
-                    try:
-                        data = json.loads(line.decode('utf-8'))
-                        if 'response' in data:
-                            yield data['response']
-                    except:
-                        pass
-                        
+            for chunk in agent.chat_stream(message):
+                yield chunk
         except Exception as e:
             logger.error(f"Chat error: {e}")
             yield f"Error: {str(e)}"
@@ -75,6 +48,7 @@ def chat():
 @app.route('/api/models', methods=['GET'])
 def list_models():
     try:
+        import requests
         response = requests.get('http://localhost:11434/api/tags')
         return jsonify(response.json())
     except:
@@ -92,6 +66,7 @@ def pull_model():
     full_model = f"hf.co/{model}:{quant}"
     
     def generate():
+        import requests
         try:
             response = requests.post(
                 'http://localhost:11434/api/pull',
@@ -125,6 +100,7 @@ def clear_memory():
 @app.route('/api/status', methods=['GET'])
 def status():
     try:
+        import requests
         response = requests.get('http://localhost:11434/api/version', timeout=2)
         return jsonify({'ollama': 'running', 'version': response.json()})
     except:
