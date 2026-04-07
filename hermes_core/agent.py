@@ -202,7 +202,7 @@ Call them when appropriate by emitting a JSON tool_call block.
 
 # ── OLLAMA STREAMING CHAT ─────────────────────────────────────────
 def chat_stream(messages: list, cfg: dict) -> Iterator[str]:
-    """Stream chat response from Ollama, handling tool calls - FIXED VERSION."""
+    """Stream chat response from Ollama, handling tool calls."""
     host = cfg["ollama_host"].rstrip("/")
     tag  = model_tag(cfg)
     system = build_system(cfg)
@@ -217,7 +217,6 @@ def chat_stream(messages: list, cfg: dict) -> Iterator[str]:
     try:
         with httpx.Client(timeout=120) as client:
             with client.stream("POST", f"{host}/api/chat", json=payload) as resp:
-                # FIXED: Read response properly
                 if resp.status_code != 200:
                     body = resp.text
                     yield f"data: {json.dumps({'error': f'Ollama {resp.status_code}: {body}', 'done': True})}\n\n"
@@ -226,13 +225,12 @@ def chat_stream(messages: list, cfg: dict) -> Iterator[str]:
                 tool_calls_buffer = []
                 full_content = ""
 
-                # FIXED: Properly iterate stream
                 for line in resp.iter_lines():
                     if not line:
                         continue
                     try:
                         obj = json.loads(line)
-                    except json.JSONDecodeError:
+                    except:
                         continue
 
                     msg = obj.get("message", {})
@@ -286,7 +284,6 @@ def ollama_pull_stream(model: str, host: str) -> Iterator[str]:
         with httpx.Client(timeout=600) as client:
             with client.stream("POST", f"{host.rstrip('/')}/api/pull",
                                json={"name": model}) as resp:
-                # FIXED: Proper streaming
                 for line in resp.iter_lines():
                     if line:
                         yield f"data: {line}\n\n"
