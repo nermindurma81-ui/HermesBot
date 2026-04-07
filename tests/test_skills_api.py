@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import app, _detect_public_base_url
 from orchestrator import HermesOrchestrator
 import hermes_core.agent as agent_module
+from skills import web_search as web_search_skill
 
 
 def test_skills_market_and_python_listing():
@@ -209,3 +210,33 @@ def test_chat_stream_falls_back_to_hf_space(monkeypatch):
     text = "".join(chunks)
     assert "HF fallback radi" in text
     assert '"done": true' in text.lower()
+
+
+def test_web_search_handles_wikipedia_403_without_crash(monkeypatch):
+    class _Resp:
+        def __init__(self, payload=None, status_code=200):
+            self._payload = payload or {}
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                req = agent_module.httpx.Request("GET", "https://en.wikipedia.org/w/api.php")
+                resp = agent_module.httpx.Response(self.status_code, request=req)
+                raise agent_module.httpx.HTTPStatusError("forbidden", request=req, response=resp)
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, params=None, headers=None, timeout=20):
+        if "duckduckgo" in url:
+            return _Resp(payload={"AbstractText": "", "RelatedTopics": []}, status_code=200)
+        return _Resp(payload={}, status_code=403)
+
+    monkeypatch.setattr(web_search_skill.httpx, "get", fake_get)
+    out = web_search_skill.run("/install skill web_search")
+    assert "Nisam našao rezultate" in out
+    assert "install skill web_search" in out
+
+
+def test_web_search_normalizes_leading_slash():
+    assert web_search_skill._normalize_query("/hello world") == "hello world"
