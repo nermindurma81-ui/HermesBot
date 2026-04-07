@@ -12,6 +12,14 @@ import datetime
 import httpx
 from pathlib import Path
 from typing import Iterator, Optional
+from hermes_core.skill_loader import (
+    detect_relevant_skills,
+    build_skill_context,
+    inject_skills_into_system_prompt,
+    list_available_skills,
+    load_skill as load_skill_markdown_pack,
+    save_skill as save_skill_markdown_pack,
+)
 
 BASE_DIR = Path(__file__).parent.parent
 MEMORY_FILE = BASE_DIR / "memory" / "MEMORY.md"
@@ -141,6 +149,20 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "read_skill",
+            "description": "Read the content of a SKILL.md skill pack by name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "ollama_status",
             "description": "Check Ollama connection and list available local models.",
             "parameters": {"type": "object", "properties": {}}
@@ -172,11 +194,23 @@ def execute_tool(name: str, args: dict, cfg: dict) -> str:
         return mem if mem else "No memories yet."
     elif name == "list_skills":
         skills = list_skills()
-        if not skills:
+        packed_skills = list_available_skills()
+        if not skills and not packed_skills:
             return "No skills yet."
-        return "\n".join(f"- **{s['name']}**: {s['title']}" for s in skills)
+        lines = [f"- **{s['name']}**: {s['title']}" for s in skills]
+        lines.extend(f"- **{s['name']}**: {s.get('description','')}" for s in packed_skills)
+        return "\n".join(lines)
+    elif name == "read_skill":
+        requested = (args.get("name") or "").strip()
+        if not requested:
+            return "❌ Missing skill name."
+        content = load_skill_markdown_pack(requested)
+        if not content:
+            return f"Skill '{requested}' nije pronađen."
+        return f"Sadržaj skilla '{requested}':\n\n{content}"
     elif name == "create_skill":
         save_skill(args["name"], args["content"])
+        save_skill_markdown_pack(args["name"], args["content"])
         return f"✅ Skill '{args['name']}' saved."
     elif name == "ollama_status":
         try:
@@ -195,15 +229,15 @@ def execute_tool(name: str, args: dict, cfg: dict) -> str:
     return f"Unknown tool: {name}"
 
 # ── SYSTEM PROMPT builder ─────────────────────────────────────────
-def build_system(cfg: dict) -> str:
+def build_system(cfg: dict, user_message: str = "") -> str:
     mem = load_memory()
     skills = list_skills()
     skill_list = "\n".join(f"- {s['name']}: {s['title']}" for s in skills) or "none yet"
     memory_block = f"\n\n## Your Memory\n{mem}" if mem else ""
-    return f"""{cfg['system_prompt']}
+    base_prompt = f"""{cfg['system_prompt']}
 
 ## Available Tools
-You have tools: remember, recall_memory, list_skills, create_skill, ollama_status, pull_model.
+You have tools: remember, recall_memory, list_skills, create_skill, read_skill, ollama_status, pull_model.
 Call them when appropriate by emitting a JSON tool_call block.
 
 ## Skills
@@ -215,6 +249,9 @@ Call them when appropriate by emitting a JSON tool_call block.
 ## Date
 {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
 """
+    relevant_skills = detect_relevant_skills(user_message or "")
+    skill_context = build_skill_context(relevant_skills)
+    return inject_skills_into_system_prompt(base_prompt, skill_context)
 
 
 def _chat_via_hf_space(messages: list, cfg: dict) -> Iterator[str]:
@@ -224,7 +261,12 @@ def _chat_via_hf_space(messages: list, cfg: dict) -> Iterator[str]:
         return
 
     endpoint = f"{base_url}/v1/chat/completions"
-    system = build_system(cfg)
+    latest_user = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            latest_user = m.get("content", "")
+            break
+    system = build_system(cfg, latest_user)
     model = cfg.get("hf_space_model") or "default"
     headers = {"Content-Type": "application/json"}
     if cfg.get("hf_space_api_key"):
@@ -255,7 +297,12 @@ def chat_stream(messages: list, cfg: dict) -> Iterator[str]:
     """Stream chat response from Ollama, handling tool calls."""
     host = cfg["ollama_host"].rstrip("/")
     tag  = model_tag(cfg)
-    system = build_system(cfg)
+    latest_user = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            latest_user = m.get("content", "")
+            break
+    system = build_system(cfg, latest_user)
 
     payload = {
         "model": tag,

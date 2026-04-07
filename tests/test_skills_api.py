@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import app, _detect_public_base_url
 from orchestrator import HermesOrchestrator
 import hermes_core.agent as agent_module
+import hermes_core.skill_loader as skill_loader
 from skills import web_search as web_search_skill
 
 
@@ -240,3 +241,29 @@ def test_web_search_handles_wikipedia_403_without_crash(monkeypatch):
 
 def test_web_search_normalizes_leading_slash():
     assert web_search_skill._normalize_query("/hello world") == "hello world"
+
+
+def test_skill_loader_detects_skill_from_skill_md(tmp_path, monkeypatch):
+    skills_dir = tmp_path / "skills"
+    coding_dir = skills_dir / "coding"
+    coding_dir.mkdir(parents=True, exist_ok=True)
+    (coding_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: coding\n"
+        "description: coding python debugging tasks\n"
+        "---\n"
+        "# Coding Skill\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(skill_loader, "SKILLS_DIR", skills_dir)
+    detected = skill_loader.detect_relevant_skills("Treba mi python debugging pomoc")
+    assert "coding" in detected
+
+
+def test_build_system_injects_skill_context(monkeypatch):
+    cfg = agent_module.get_cfg()
+    monkeypatch.setattr(agent_module, "detect_relevant_skills", lambda _msg: ["planning"])
+    monkeypatch.setattr(agent_module, "build_skill_context", lambda _skills: "=== ACTIVE SKILLS ===\n--- SKILL: planning ---")
+    system = agent_module.build_system(cfg, "napravi plan")
+    assert "ACTIVE SKILLS" in system
