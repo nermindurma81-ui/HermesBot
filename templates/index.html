@@ -706,7 +706,20 @@ body{
       <!-- Skills -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div class="card-title">Skillovi</div>
-        <button class="btn btn-primary btn-sm" onclick="showSkillEditor()">+ Novi skill</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+          <button class="btn btn-secondary btn-sm" onclick="loadSkills()">🔄 Osvježi</button>
+          <button class="btn btn-secondary btn-sm" onclick="window.open('https://clawhub.ai/','_blank')">🛒 ClawHub</button>
+          <button class="btn btn-primary btn-sm" onclick="showSkillEditor()">+ Novi skill</button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:10px">
+        <div class="form-label">Market install (.py raw URL)</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input class="form-input" id="marketSkillUrlInput" placeholder="https://raw.githubusercontent.com/.../skill.py" style="flex:1;min-width:240px">
+          <button class="btn btn-primary btn-sm" onclick="installMarketSkill()">⬇ Instalisaj</button>
+          <button class="btn btn-secondary btn-sm" onclick="activateSelectedSkills()">🧠 Load in brain</button>
+        </div>
       </div>
 
       <div id="skill-editor" class="card">
@@ -1306,13 +1319,19 @@ async function clearMemory() {
 // ── SKILLS ───────────────────────────────────────────────────────
 async function loadSkills() {
   try {
-    const [rMd, rPy] = await Promise.all([
+    const [rMd, rPy, rInstalled, rBrain] = await Promise.all([
       fetch('/api/skills'),
-      fetch('/api/skills/python')
+      fetch('/api/skills/python'),
+      fetch('/api/skills/installed'),
+      fetch('/api/skills/brain')
     ]);
     const skills = await rMd.json();
     const pyData = await rPy.json();
+    const installedData = await rInstalled.json();
+    const brainData = await rBrain.json();
     const pySkills = pyData.skills || [];
+    const installed = installedData.skills || [];
+    const activeSet = new Set((brainData.active || []).map(x => String(x)));
     const container = document.getElementById('skillsList');
     if(!skills.length && !pySkills.length) {
       container.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:20px">Nema skillova. Hermes ih kreira automatski kroz konverzaciju.</div>';
@@ -1326,6 +1345,10 @@ async function loadSkills() {
             <div style="font-size:12px;color:var(--muted)">MD · ${s.title}</div>
           </div>
           <div class="skill-actions">
+            <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px">
+              <input type="checkbox" class="brain-skill-check" value="${s.name}" ${activeSet.has(s.name) ? 'checked' : ''}>
+              brain
+            </label>
             <button class="btn btn-danger btn-sm" onclick="deleteSkill('${s.name}')">🗑</button>
           </div>
         </div>
@@ -1342,12 +1365,54 @@ async function loadSkills() {
             <div style="font-size:12px;color:var(--muted)">PY skill</div>
           </div>
           <div class="skill-actions">
+            <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px">
+              <input type="checkbox" class="brain-skill-check" value="${name}" ${activeSet.has(name) ? 'checked' : ''}>
+              brain
+            </label>
             <button class="btn btn-danger btn-sm" onclick="deleteSkill('${name}')">🗑</button>
           </div>
         </div>
       </div>`).join('');
-    container.innerHTML = mdCards + pyCards;
+    const installedList = installed.length
+      ? `<div class="card" style="margin-bottom:10px"><div class="card-desc">Instalisani skillovi (scroll)</div>
+           <div style="max-height:180px;overflow:auto;margin-top:6px;font-size:12px;color:var(--muted)">
+             ${installed.map(s => `<div>• ${s.name} ${s.active ? '🧠' : ''}</div>`).join('')}
+           </div></div>`
+      : '';
+    container.innerHTML = installedList + mdCards + pyCards;
   } catch(e) {}
+}
+
+async function installMarketSkill() {
+  const url = document.getElementById('marketSkillUrlInput').value.trim();
+  if(!url) { toast('Unesi raw .py URL'); return; }
+  const r = await fetch('/api/skills/market/install', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({url})
+  });
+  const d = await r.json();
+  if(d.ok) {
+    toast(`✅ Instaliran: ${d.name}`);
+    document.getElementById('marketSkillUrlInput').value = '';
+    loadSkills();
+    return;
+  }
+  toast(`❌ ${d.error || 'Install failed'}`);
+}
+
+async function activateSelectedSkills() {
+  const selected = Array.from(document.querySelectorAll('.brain-skill-check:checked')).map(el => el.value);
+  const r = await fetch('/api/skills/brain', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({skills: selected})
+  });
+  const d = await r.json();
+  if(d.ok) {
+    toast(`🧠 Aktivni skillovi: ${d.active.join(', ') || 'none'}`);
+    loadSkills();
+    return;
+  }
+  toast(`❌ ${d.error || 'Neuspjelo snimanje brain skillova'}`);
 }
 
 function showSkillEditor() {

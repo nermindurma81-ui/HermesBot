@@ -17,6 +17,7 @@ from hermes_core.skill_loader import (
     build_skill_context,
     inject_skills_into_system_prompt,
     list_available_skills,
+    get_active_skills,
     load_skill as load_skill_markdown_pack,
     save_skill as save_skill_markdown_pack,
 )
@@ -249,8 +250,9 @@ Call them when appropriate by emitting a JSON tool_call block.
 ## Date
 {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
 """
-    relevant_skills = detect_relevant_skills(user_message or "")
-    skill_context = build_skill_context(relevant_skills)
+    relevant_skills = set(detect_relevant_skills(user_message or ""))
+    active_skills = set(get_active_skills())
+    skill_context = build_skill_context(sorted(relevant_skills | active_skills))
     return inject_skills_into_system_prompt(base_prompt, skill_context)
 
 

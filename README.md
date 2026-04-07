@@ -177,6 +177,21 @@ Direktni GitHub linkovi:
 
 U ovom template-u je dodata i `GET /` ruta (vrati JSON status), tako da više nećeš dobijati 404 na root putanji.
 
+## Skill market / brain load (novo)
+
+- UI Skills tab sada ima:
+  - scroll listu instaliranih skillova,
+  - direktni install preko raw `.py` URL-a,
+  - izbor aktivnih "brain" skillova (injektuju se u system prompt).
+- Backend endpointi:
+  - `GET /api/skills/installed`
+  - `GET /api/skills/brain`
+  - `POST /api/skills/brain` body: `{"skills":["web_search","weather"]}`
+- CLI skripte:
+  - `python scripts/fetch_clawhub_skills.py --url <raw_py_url>`
+  - `python scripts/fetch_clawhub_skills.py --from-catalog`
+  - `python scripts/load_brain_skills.py web_search weather`
+
 ### Brzi check za tvoj konkretan Space
 
 Ako je Space naziv `nermind/hermes-openai-gateway`, testiraj baš ove URL-ove:

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import os
 import re
+import json
 from pathlib import Path
 from typing import Optional
 
 SKILLS_DIR = Path(os.getenv("SKILLS_DIR", "skills"))
+ACTIVE_SKILLS_FILE = Path(os.getenv("ACTIVE_SKILLS_FILE", "memory/ACTIVE_SKILLS.json"))
 
 
 def list_available_skills() -> list[dict]:
@@ -87,6 +89,28 @@ def inject_skills_into_system_prompt(base_prompt: str, skill_context: str) -> st
     if not skill_context:
         return base_prompt
     return f"{base_prompt}\n\n{skill_context}"
+
+
+def get_active_skills() -> list[str]:
+    try:
+        if not ACTIVE_SKILLS_FILE.exists():
+            return []
+        data = ACTIVE_SKILLS_FILE.read_text(encoding="utf-8")
+        parsed = json.loads(data)
+        skills = parsed.get("skills", []) if isinstance(parsed, dict) else []
+        return [str(s).strip() for s in skills if str(s).strip()]
+    except Exception:
+        return []
+
+
+def set_active_skills(skill_names: list[str]) -> list[str]:
+    clean = sorted(set(str(s).strip() for s in (skill_names or []) if str(s).strip()))
+    ACTIVE_SKILLS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ACTIVE_SKILLS_FILE.write_text(
+        json.dumps({"skills": clean}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return clean
 
 
 def _extract_description(skill_file: Path) -> str:

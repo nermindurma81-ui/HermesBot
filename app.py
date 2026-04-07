@@ -13,6 +13,7 @@ from hermes_core.agent import (
 )
 # IMPORT: Tvoj novi Orchestrator koji pokreće .py skillove
 from orchestrator import HermesOrchestrator
+from hermes_core.skill_loader import get_active_skills, set_active_skills
 
 # ── SUPABASE (optional) ───────────────────────────────────────────
 try:
@@ -466,6 +467,33 @@ def api_skills_list():
 @app.route("/api/skills/python", methods=["GET"])
 def api_python_skills_list():
     return jsonify({"skills": orchestrator.list_python_skills()})
+
+
+@app.route("/api/skills/installed", methods=["GET"])
+def api_skills_installed():
+    py_skills = set(orchestrator.list_python_skills())
+    md_skills = set(s.get("name") for s in list_skills())
+    names = sorted(py_skills | md_skills)
+    active = set(get_active_skills())
+    return jsonify({
+        "skills": [{"name": n, "active": n in active} for n in names],
+        "active": sorted(active),
+    })
+
+
+@app.route("/api/skills/brain", methods=["GET"])
+def api_skills_brain_get():
+    return jsonify({"active": get_active_skills()})
+
+
+@app.route("/api/skills/brain", methods=["POST"])
+def api_skills_brain_set():
+    data = request.json or {}
+    names = data.get("skills", [])
+    if not isinstance(names, list):
+        return jsonify({"ok": False, "error": "skills must be a list"}), 400
+    selected = set_active_skills([_safe_skill_name(x) for x in names])
+    return jsonify({"ok": True, "active": selected})
 
 @app.route("/api/skills/<name>", methods=["GET"])
 def api_skill_get(name):

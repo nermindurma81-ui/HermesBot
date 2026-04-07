@@ -296,3 +296,26 @@ def test_skills_read_command_returns_skill_info():
     tool, output = orchestrator.detect_intent_and_execute("/skills read web_search")
     assert tool == "read_skill"
     assert "web_search" in output
+
+
+def test_skills_brain_selection_api_roundtrip():
+    client = app.test_client()
+    set_resp = client.post("/api/skills/brain", json={"skills": ["web_search", "weather"]})
+    assert set_resp.status_code == 200
+    payload = set_resp.get_json()
+    assert payload["ok"] is True
+    assert "web_search" in payload["active"]
+
+    get_resp = client.get("/api/skills/brain")
+    assert get_resp.status_code == 200
+    active = get_resp.get_json()["active"]
+    assert "weather" in active
+
+
+def test_skills_installed_endpoint_returns_items():
+    client = app.test_client()
+    r = client.get("/api/skills/installed")
+    assert r.status_code == 200
+    payload = r.get_json()
+    assert "skills" in payload
+    assert isinstance(payload["skills"], list)
