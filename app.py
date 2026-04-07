@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import threading
+import re  # DODANO: Za prepoznavanje [skill](params)
 from flask import Flask, request, jsonify, render_template, Response, stream_with_context
 from hermes_core.agent import (
     get_cfg, model_tag, chat_stream,
@@ -9,18 +10,21 @@ from hermes_core.agent import (
     load_memory, save_memory, list_skills, save_skill, get_skill,
     append_memory, MEMORY_FILE, SKILLS_DIR
 )
+# DODANO: Importamo naš novi Orchestrator (moraš ga imati kao orchestrator.py)
+from orchestrator import HermesOrchestrator
 
 # ── SUPABASE (optional) ───────────────────────────────────────────
 try:
     from hermes_core import supabase_sync as _sb
-    _SUPABASE = True
     _startup = _sb.sync_on_startup()
     print(f"[Supabase] Startup sync: {_startup}")
+    _SUPABASE = True
 except Exception as _e:
     _SUPABASE = False
     print(f"[Supabase] Not configured or error: {_e}")
 
 app = Flask(__name__)
+orchestrator = HermesOrchestrator() # Inicijalizacija izvršitelja
 
 # ─────────────────────────────────────────────────────────────────
 # PAGES
@@ -45,7 +49,7 @@ def api_config():
     return jsonify(safe)
 
 # ─────────────────────────────────────────────────────────────────
-# CHAT API (streaming SSE)
+# CHAT API (streaming SSE) - OVDJE JE GLAVNA PROMJENA
 # ─────────────────────────────────────────────────────────────────
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
@@ -54,7 +58,20 @@ def api_chat():
     cfg = get_cfg()
 
     def generate():
-        yield from chat_stream(messages, cfg)
+        # 1. Prvo dobijemo odgovor od AI modela (streaming)
+        for chunk in chat_stream(messages, cfg):
+            # Čekamo da AI završi cijelu rečenicu/odgovor da bismo provjerili skillove
+            # Napomena: U streaming modu, najbolje je provjeriti skillove 
+            # nakon što se stream završi ili u zasebnom koraku.
+            yield chunk
+
+        # 2. Provjera skillova (Post-processing)
+        # Uzimamo zadnju poruku AI-ja da vidimo je li pozvao skill
+        last_ai_msg = messages[-1]["content"] if messages else ""
+        skill_result = orchestrator.parse_response(last_ai_msg)
+        
+        if skill_result:
+            yield f"data: {json.dumps({'type': 'skill_result', 'content': skill_result})}\n\n"
 
     return Response(
         stream_with_context(generate()),
@@ -150,7 +167,7 @@ def api_memory_clear():
     return jsonify({"ok": True})
 
 # ─────────────────────────────────────────────────────────────────
-# SKILLS API
+# SKILLS API (MD & PY)
 # ─────────────────────────────────────────────────────────────────
 @app.route("/api/skills", methods=["GET"])
 def api_skills_list():
