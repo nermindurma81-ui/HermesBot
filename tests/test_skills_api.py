@@ -69,3 +69,10 @@ def test_chat_direct_skill_stream_includes_content_chunk():
     body = resp.data.decode("utf-8")
     assert '"tool_call": "web_search"' in body
     assert '"content":' in body
+
+
+def test_ollama_status_reports_offline_for_unreachable_host(monkeypatch):
+    monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:65530")
+    client = app.test_client()
+    data = client.get("/api/ollama/status").get_json()
+    assert data["online"] is False
