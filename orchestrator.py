@@ -2,6 +2,7 @@ import re
 import importlib.util
 import os
 import inspect
+from pathlib import Path
 
 class HermesOrchestrator:
     def __init__(self, skills_dir="skills"):
@@ -98,6 +99,52 @@ class HermesOrchestrator:
 
         return None
 
+    def _skill_signature_hint(self, skill_name: str):
+        file_path = os.path.join(self.skills_dir, f"{skill_name}.py")
+        if not os.path.exists(file_path):
+            return None
+        try:
+            spec = importlib.util.spec_from_file_location(skill_name, file_path)
+            skill_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(skill_module)
+            if not hasattr(skill_module, "run"):
+                return "run() funkcija nije pronađena."
+            sig = inspect.signature(skill_module.run)
+            return f"/skill {skill_name} {', '.join(str(p) for p in sig.parameters.values())}"
+        except Exception:
+            return None
+
+    def _install_skill_pack(self, raw_name: str):
+        wanted = (raw_name or "").strip().lower().replace("-", "_").replace(" ", "_")
+        if not wanted:
+            return "❌ Napiši ime skilla. Primjer: /install skill web_search"
+
+        # 1) Ako već postoji Python skill, samo vrati uputu za poziv.
+        if wanted in self.list_python_skills():
+            hint = self._skill_signature_hint(wanted) or f"/skill {wanted} query=\"...\""
+            return f"✅ Skill '{wanted}' je već dostupan.\nKoristi ga ovako: {hint}"
+
+        # 2) Ako postoji SKILL.md pack istog imena.
+        skill_pack = Path(self.skills_dir) / wanted / "SKILL.md"
+        if skill_pack.exists():
+            return f"✅ SKILL pack '{wanted}' je već instaliran na: {skill_pack}"
+
+        # 3) Posebno mapiranje za upite poput 'znanje jezika' -> 08_znanje_jezika
+        alias_map = {
+            "znanje_jezika": "08_znanje_jezika",
+            "web_pretrazivanje": "01_web_pretrazivanje",
+        }
+        mapped = alias_map.get(wanted)
+        if mapped and mapped in self.list_python_skills():
+            hint = self._skill_signature_hint(mapped) or f"/skill {mapped} query=\"...\""
+            return f"✅ Skill '{mapped}' je dostupan.\nKoristi ga ovako: {hint}"
+
+        return (
+            f"❌ Skill '{raw_name}' nije pronađen.\n"
+            "Instalacija packova: pokreni `bash scripts/install_skills.sh` u rootu projekta.\n"
+            "Za listu dostupnih koristi: `Komande za skills`."
+        )
+
     def _extract_weather_location(self, text: str):
         # Primjeri: "kakvo je vrijeme u Splitu", "weather in Paris"
         m = re.search(r"(?:vrijeme|weather)\s+(?:u|za|in)\s+([A-Za-zČĆŽŠĐčćžšđ\-\s]+)\??", text, re.IGNORECASE)
@@ -109,6 +156,21 @@ class HermesOrchestrator:
     def detect_intent_and_execute(self, user_text: str):
         text = (user_text or "").strip()
         low = text.lower()
+
+        # Eksplicitna komanda: /install skill <ime>
+        m_install = re.match(r"^/?install\s+skill\s+(.+)$", low, re.IGNORECASE)
+        if m_install:
+            requested = m_install.group(1).strip()
+            return ("install_skill", self._install_skill_pack(requested))
+
+        # Eksplicitna komanda: "use skill <ime>" ili "skill <ime>" -> ne šalji na web_search
+        m_use = re.match(r"^(?:use\s+skill|skill)\s+([a-zA-Z0-9_\-]+)$", low, re.IGNORECASE)
+        if m_use:
+            requested = m_use.group(1).strip().replace("-", "_")
+            if requested in self.list_python_skills():
+                hint = self._skill_signature_hint(requested) or f"/skill {requested} query=\"...\""
+                return ("skill_help", f"✅ Skill '{requested}' je dostupan.\nPokreni ga ovako: {hint}")
+            return ("skill_help", f"❌ Skill '{requested}' nije pronađen. Koristi 'Komande za skills' za listu.")
 
         # Eksplicitna komanda: /skill ime param="x"
         if low.startswith("/skill "):

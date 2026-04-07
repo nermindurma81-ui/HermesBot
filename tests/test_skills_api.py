@@ -267,3 +267,17 @@ def test_build_system_injects_skill_context(monkeypatch):
     monkeypatch.setattr(agent_module, "build_skill_context", lambda _skills: "=== ACTIVE SKILLS ===\n--- SKILL: planning ---")
     system = agent_module.build_system(cfg, "napravi plan")
     assert "ACTIVE SKILLS" in system
+
+
+def test_install_skill_command_does_not_fall_back_to_web_search():
+    orchestrator = HermesOrchestrator()
+    tool, output = orchestrator.detect_intent_and_execute("/install skill web_search")
+    assert tool == "install_skill"
+    assert "već dostupan" in output
+
+
+def test_use_skill_command_returns_usage_hint():
+    orchestrator = HermesOrchestrator()
+    tool, output = orchestrator.detect_intent_and_execute("Use skill web_search")
+    assert tool == "skill_help"
+    assert "/skill web_search" in output
