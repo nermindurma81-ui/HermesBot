@@ -19,6 +19,13 @@ SKILLS_DIR  = BASE_DIR / "skills"
 MEMORY_FILE.parent.mkdir(exist_ok=True)
 SKILLS_DIR.mkdir(exist_ok=True)
 
+# ── SUPABASE (optional, graceful fallback) ────────────────────────
+try:
+    from hermes_core import supabase_sync as _sb
+    _SUPABASE = True
+except ImportError:
+    _SUPABASE = False
+
 # ── CONFIG ────────────────────────────────────────────────────────
 def get_cfg():
     return {
@@ -51,6 +58,9 @@ def load_memory() -> str:
 
 def save_memory(content: str):
     MEMORY_FILE.write_text(content)
+    if _SUPABASE:
+        try: _sb.push_memory()
+        except: pass
 
 def append_memory(note: str):
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -74,6 +84,9 @@ def get_skill(name: str) -> Optional[str]:
 def save_skill(name: str, content: str):
     path = SKILLS_DIR / f"{name}.md"
     path.write_text(content)
+    if _SUPABASE:
+        try: _sb.push_skills()
+        except: pass
 
 # ── TOOLS ─────────────────────────────────────────────────────────
 TOOLS = [
@@ -216,9 +229,15 @@ def chat_stream(messages: list, cfg: dict) -> Iterator[str]:
 
     try:
         with httpx.Client(timeout=120) as client:
+            # Push incoming user message to Supabase
+            if _SUPABASE and messages:
+                last = messages[-1]
+                try: _sb.push_message(last.get("role","user"), last.get("content",""))
+                except: pass
+
             with client.stream("POST", f"{host}/api/chat", json=payload) as resp:
                 if resp.status_code != 200:
-                    resp.read()  # ✅ POPRAVAK: mora se pozvati read() prije .text na streaming response
+                    resp.read()
                     body = resp.text
                     yield f"data: {json.dumps({'error': f'Ollama {resp.status_code}: {body}', 'done': True})}\n\n"
                     return
@@ -247,6 +266,11 @@ def chat_stream(messages: list, cfg: dict) -> Iterator[str]:
                         tool_calls_buffer.extend(tool_calls)
 
                     if done:
+                        # Push assistant reply to Supabase
+                        if _SUPABASE and full_content:
+                            try: _sb.push_message("assistant", full_content)
+                            except: pass
+
                         # Execute any tool calls
                         if tool_calls_buffer:
                             for tc in tool_calls_buffer:
