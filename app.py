@@ -3,6 +3,7 @@ import json
 import asyncio
 import threading
 import re  # Za prepoznavanje [skill](params)
+from urllib.parse import urlparse
 from flask import Flask, request, jsonify, render_template, Response, stream_with_context
 from hermes_core.agent import (
     get_cfg, model_tag, chat_stream,
@@ -26,6 +27,27 @@ except Exception as _e:
 app = Flask(__name__)
 # Inicijalizacija izvršitelja skillova
 orchestrator = HermesOrchestrator()
+
+
+def _safe_skill_name(name: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_]", "_", (name or "").strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    return cleaned.lower()
+
+
+def _market_catalog():
+    return {
+        "market": "OpenClaw Community (curated sample)",
+        "links": {
+            "clawhub": "https://clawhub.ai/",
+            "github": "https://github.com/VoltAgent/awesome-openclaw-skills",
+            "openclaw": "https://clawskills.sh/"
+        },
+        "install_note": "Za instalaciju pošalji raw .py URL kroz POST /api/skills/market/install",
+        "examples": [
+            "https://raw.githubusercontent.com/<owner>/<repo>/<branch>/skills/my_skill.py"
+        ]
+    }
 
 # ─────────────────────────────────────────────────────────────────
 # PAGES
@@ -214,6 +236,11 @@ def api_memory_clear():
 def api_skills_list():
     return jsonify(list_skills())
 
+
+@app.route("/api/skills/python", methods=["GET"])
+def api_python_skills_list():
+    return jsonify({"skills": orchestrator.list_python_skills()})
+
 @app.route("/api/skills/<name>", methods=["GET"])
 def api_skill_get(name):
     content = get_skill(name)
@@ -236,6 +263,55 @@ def api_skill_delete(name):
         path.unlink()
         return jsonify({"ok": True})
     return jsonify({"error": "Not found"}), 404
+
+
+@app.route("/api/skills/market", methods=["GET"])
+def api_skills_market():
+    return jsonify(_market_catalog())
+
+
+@app.route("/api/skills/market/install", methods=["POST"])
+def api_skills_market_install():
+    data = request.json or {}
+    url = (data.get("url") or "").strip()
+    skill_name = _safe_skill_name(data.get("name") or "")
+
+    if not url:
+        return jsonify({"ok": False, "error": "Missing 'url'"}), 400
+
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        return jsonify({"ok": False, "error": "Only https URLs are allowed"}), 400
+    if not parsed.path.endswith(".py"):
+        return jsonify({"ok": False, "error": "URL must point to a .py file"}), 400
+
+    try:
+        import httpx
+        resp = httpx.get(url, timeout=20)
+        resp.raise_for_status()
+        code = resp.text
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Download failed: {e}"}), 400
+
+    if len(code) > 250_000:
+        return jsonify({"ok": False, "error": "Skill file too large"}), 400
+    if "def run(" not in code:
+        return jsonify({"ok": False, "error": "Skill must expose run(...) function"}), 400
+
+    if not skill_name:
+        skill_name = _safe_skill_name(os.path.basename(parsed.path).replace(".py", ""))
+    if not skill_name:
+        return jsonify({"ok": False, "error": "Cannot derive valid skill name"}), 400
+
+    path = SKILLS_DIR / f"{skill_name}.py"
+    path.write_text(code, encoding="utf-8")
+
+    return jsonify({
+        "ok": True,
+        "name": skill_name,
+        "path": str(path),
+        "message": f"Skill '{skill_name}' installed"
+    })
 
 # ─────────────────────────────────────────────────────────────────
 # SUPABASE API
