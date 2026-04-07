@@ -243,10 +243,19 @@ def api_python_skills_list():
 
 @app.route("/api/skills/<name>", methods=["GET"])
 def api_skill_get(name):
-    content = get_skill(name)
-    if content is None:
-        return jsonify({"error": "Not found"}), 404
-    return jsonify({"name": name, "content": content})
+    md_content = get_skill(name)
+    if md_content is not None:
+        return jsonify({"name": name, "content": md_content, "type": "markdown"})
+
+    py_path = SKILLS_DIR / f"{name}.py"
+    if py_path.exists():
+        return jsonify({
+            "name": name,
+            "content": py_path.read_text(encoding="utf-8"),
+            "type": "python"
+        })
+
+    return jsonify({"error": "Not found"}), 404
 
 @app.route("/api/skills/<name>", methods=["POST", "PUT"])
 def api_skill_save(name):
@@ -257,11 +266,19 @@ def api_skill_save(name):
 
 @app.route("/api/skills/<name>", methods=["DELETE"])
 def api_skill_delete(name):
-    from pathlib import Path
-    path = SKILLS_DIR / f"{name}.md"
-    if path.exists():
-        path.unlink()
-        return jsonify({"ok": True})
+    removed = []
+    md_path = SKILLS_DIR / f"{name}.md"
+    py_path = SKILLS_DIR / f"{name}.py"
+
+    if md_path.exists():
+        md_path.unlink()
+        removed.append(str(md_path.name))
+    if py_path.exists():
+        py_path.unlink()
+        removed.append(str(py_path.name))
+
+    if removed:
+        return jsonify({"ok": True, "removed": removed})
     return jsonify({"error": "Not found"}), 404
 
 
