@@ -109,6 +109,35 @@ def _extract_file_preview(path, ext: str) -> str:
 
     return ""
 
+
+def _detect_public_base_url(payload_url: str = "") -> str:
+    """Vrati javni HTTPS base URL za webhook (Railway/proxy-safe)."""
+    raw = (payload_url or "").strip().rstrip("/")
+    if raw:
+        return raw
+
+    for env_key in ("TELEGRAM_WEBHOOK_BASE_URL", "PUBLIC_BASE_URL", "RAILWAY_STATIC_URL"):
+        value = (os.environ.get(env_key, "") or "").strip().rstrip("/")
+        if value:
+            return value
+
+    railway_domain = (os.environ.get("RAILWAY_PUBLIC_DOMAIN", "") or "").strip().rstrip("/")
+    if railway_domain:
+        if railway_domain.startswith("http://") or railway_domain.startswith("https://"):
+            return railway_domain
+        return f"https://{railway_domain}"
+
+    host_url = request.host_url.rstrip("/")
+    parsed = urlparse(host_url)
+    host = (parsed.hostname or "").lower()
+    if host in {"localhost", "127.0.0.1"}:
+        return host_url
+
+    scheme = parsed.scheme or "https"
+    if scheme != "https":
+        scheme = "https"
+    return f"{scheme}://{parsed.netloc}".rstrip("/")
+
 # ─────────────────────────────────────────────────────────────────
 # PAGES
 # ─────────────────────────────────────────────────────────────────
@@ -163,9 +192,7 @@ def api_telegram_webhook_set():
         return jsonify({"ok": False, "status": "missing_token"}), 400
 
     data = request.json or {}
-    public_url = (data.get("public_url") or "").strip().rstrip("/")
-    if not public_url:
-        public_url = request.host_url.rstrip("/")
+    public_url = _detect_public_base_url(data.get("public_url"))
     webhook_url = f"{public_url}/api/telegram/webhook"
 
     try:

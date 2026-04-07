@@ -4,7 +4,7 @@ import subprocess
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app import app
+from app import app, _detect_public_base_url
 from orchestrator import HermesOrchestrator
 
 
@@ -102,3 +102,18 @@ def test_telegram_webhook_ignored_without_text(monkeypatch):
     r = client.post("/api/telegram/webhook", json={"message": {"chat": {"id": 1}}})
     assert r.status_code == 200
     assert r.get_json()["ignored"] is True
+
+
+def test_detect_public_base_url_prefers_railway_domain(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_WEBHOOK_BASE_URL", raising=False)
+    monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+    monkeypatch.delenv("RAILWAY_STATIC_URL", raising=False)
+    monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "my-hermes.up.railway.app")
+    with app.test_request_context("/", base_url="http://localhost:5000"):
+        assert _detect_public_base_url() == "https://my-hermes.up.railway.app"
+
+
+def test_detect_public_base_url_payload_has_priority(monkeypatch):
+    monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "my-hermes.up.railway.app")
+    with app.test_request_context("/", base_url="https://internal.local"):
+        assert _detect_public_base_url("https://custom.example.com") == "https://custom.example.com"
