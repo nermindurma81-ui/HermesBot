@@ -715,7 +715,14 @@ body{
           <input class="form-input" id="skillNameInput" placeholder="npr. web-scraping">
         </div>
         <div class="form-group">
-          <div class="form-label">Sadržaj (Markdown)</div>
+          <div class="form-label">Tip skilla</div>
+          <select class="form-input" id="skillTypeInput" onchange="onSkillTypeChange()">
+            <option value="markdown">Markdown (uputa/procedura)</option>
+            <option value="python">Python (izvršni skill)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <div class="form-label" id="skillContentLabel">Sadržaj (Markdown)</div>
           <textarea class="skill-editor-content" id="skillContentInput"
             placeholder="# Web Scraping&#10;&#10;Koristi requests + BeautifulSoup..."></textarea>
         </div>
@@ -1345,23 +1352,39 @@ async function loadSkills() {
 
 function showSkillEditor() {
   document.getElementById('skill-editor').style.display = 'block';
+  onSkillTypeChange();
 }
 function hideSkillEditor() {
   document.getElementById('skill-editor').style.display = 'none';
   document.getElementById('skillNameInput').value = '';
+  document.getElementById('skillTypeInput').value = 'markdown';
   document.getElementById('skillContentInput').value = '';
+  onSkillTypeChange();
+}
+function onSkillTypeChange() {
+  const type = document.getElementById('skillTypeInput').value;
+  const label = document.getElementById('skillContentLabel');
+  const area = document.getElementById('skillContentInput');
+  if(type === 'python') {
+    label.textContent = 'Sadržaj (Python code)';
+    area.placeholder = 'def run(query=\"\"):\n    return \"Rezultat\"';
+  } else {
+    label.textContent = 'Sadržaj (Markdown)';
+    area.placeholder = '# Web Scraping\n\nKoristi requests + BeautifulSoup...';
+  }
 }
 async function saveSkillEditor() {
   const name = document.getElementById('skillNameInput').value.trim();
+  const type = document.getElementById('skillTypeInput').value;
   const content = document.getElementById('skillContentInput').value;
   if(!name) { toast('Unesi ime skilla'); return; }
   await fetch(`/api/skills/${name}`, {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({content})
+    body: JSON.stringify({content, type})
   });
   hideSkillEditor();
   loadSkills();
-  toast('✅ Skill sačuvan');
+  toast(`✅ ${type === 'python' ? 'Python' : 'Markdown'} skill sačuvan`);
 }
 async function deleteSkill(name) {
   if(!confirm(`Briši skill ${name}?`)) return;

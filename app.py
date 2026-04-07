@@ -487,8 +487,26 @@ def api_skill_get(name):
 def api_skill_save(name):
     data = request.json or {}
     content = data.get("content", "")
-    save_skill(name, content)
-    return jsonify({"ok": True})
+    skill_type = (data.get("type") or "markdown").strip().lower()
+    safe_name = _safe_skill_name(name)
+    if not safe_name:
+        return jsonify({"ok": False, "error": "Invalid skill name"}), 400
+
+    if skill_type == "python":
+        if "def run(" not in content:
+            return jsonify({"ok": False, "error": "Python skill must include def run(...):"}), 400
+        py_path = SKILLS_DIR / f"{safe_name}.py"
+        py_path.write_text(content, encoding="utf-8")
+        md_path = SKILLS_DIR / f"{safe_name}.md"
+        if md_path.exists():
+            md_path.unlink()
+        return jsonify({"ok": True, "name": safe_name, "type": "python"})
+
+    save_skill(safe_name, content)
+    py_path = SKILLS_DIR / f"{safe_name}.py"
+    if py_path.exists():
+        py_path.unlink()
+    return jsonify({"ok": True, "name": safe_name, "type": "markdown"})
 
 @app.route("/api/skills/<name>", methods=["DELETE"])
 def api_skill_delete(name):

@@ -142,3 +142,26 @@ def test_telegram_status_reports_expected_webhook(monkeypatch):
     assert data["ok"] is True
     assert data["webhook_ok"] is True
     assert data["expected_webhook_url"] == "https://my-hermes.up.railway.app/api/telegram/webhook"
+
+
+def test_skill_save_python_and_reject_invalid_python():
+    client = app.test_client()
+
+    bad = client.post("/api/skills/tmp_exec_skill", json={"type": "python", "content": "print('x')"})
+    assert bad.status_code == 400
+    assert "must include def run" in bad.get_json()["error"]
+
+    good = client.post(
+        "/api/skills/tmp_exec_skill",
+        json={"type": "python", "content": "def run(query=''):\n    return query or 'ok'\n"}
+    )
+    assert good.status_code == 200
+    payload = good.get_json()
+    assert payload["ok"] is True
+    assert payload["type"] == "python"
+
+    loaded = client.get("/api/skills/tmp_exec_skill")
+    assert loaded.status_code == 200
+    assert loaded.get_json()["type"] == "python"
+
+    client.delete("/api/skills/tmp_exec_skill")
