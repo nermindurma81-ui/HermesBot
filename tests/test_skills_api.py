@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import subprocess
+import types
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -117,3 +118,27 @@ def test_detect_public_base_url_payload_has_priority(monkeypatch):
     monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "my-hermes.up.railway.app")
     with app.test_request_context("/", base_url="https://internal.local"):
         assert _detect_public_base_url("https://custom.example.com") == "https://custom.example.com"
+
+
+def test_telegram_status_reports_expected_webhook(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "x:dummy")
+    monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "my-hermes.up.railway.app")
+
+    class _Resp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, timeout=10):
+        if url.endswith("/getMe"):
+            return _Resp({"ok": True, "result": {"username": "MojHermesBot"}})
+        return _Resp({"ok": True, "result": {"url": "https://my-hermes.up.railway.app/api/telegram/webhook"}})
+
+    monkeypatch.setitem(sys.modules, "httpx", types.SimpleNamespace(get=fake_get))
+    client = app.test_client()
+    data = client.get("/api/connectors/telegram/status").get_json()
+    assert data["ok"] is True
+    assert data["webhook_ok"] is True
+    assert data["expected_webhook_url"] == "https://my-hermes.up.railway.app/api/telegram/webhook"

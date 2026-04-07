@@ -180,7 +180,17 @@ def api_telegram_status():
         import httpx
         me = httpx.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10).json()
         webhook = httpx.get(f"https://api.telegram.org/bot{token}/getWebhookInfo", timeout=10).json()
-        return jsonify({"ok": bool(me.get("ok")), "me": me.get("result"), "webhook": webhook.get("result")})
+        webhook_data = webhook.get("result") or {}
+        expected_webhook_url = f"{_detect_public_base_url()}/api/telegram/webhook"
+        current_webhook_url = (webhook_data.get("url") or "").strip()
+        webhook_ok = bool(current_webhook_url) and current_webhook_url == expected_webhook_url
+        return jsonify({
+            "ok": bool(me.get("ok")),
+            "me": me.get("result"),
+            "webhook": webhook_data,
+            "expected_webhook_url": expected_webhook_url,
+            "webhook_ok": webhook_ok
+        })
     except Exception as e:
         return jsonify({"ok": False, "status": "error", "error": str(e)}), 400
 

@@ -1396,7 +1396,14 @@ async function checkTelegramStatus() {
     if(d.ok) {
       document.getElementById('tgBadge').textContent = '● connected';
       document.getElementById('tgBadge').className = 'badge green';
-      el.textContent = `✅ @${d.me?.username || 'bot'} webhook: ${d.webhook?.url || '(none)'}`;
+      const current = d.webhook?.url || '(none)';
+      const expected = d.expected_webhook_url || '(unknown)';
+      const err = d.webhook?.last_error_message ? ` | last_error: ${d.webhook.last_error_message}` : '';
+      if(d.webhook_ok) {
+        el.textContent = `✅ @${d.me?.username || 'bot'} webhook: ${current}`;
+      } else {
+        el.textContent = `⚠️ @${d.me?.username || 'bot'} webhook: ${current} | expected: ${expected}${err}`;
+      }
     } else {
       document.getElementById('tgBadge').textContent = '● issue';
       document.getElementById('tgBadge').className = 'badge red';
