@@ -10,6 +10,16 @@ from hermes_core.agent import (
     append_memory, MEMORY_FILE, SKILLS_DIR
 )
 
+# ── SUPABASE (optional) ───────────────────────────────────────────
+try:
+    from hermes_core import supabase_sync as _sb
+    _SUPABASE = True
+    _startup = _sb.sync_on_startup()
+    print(f"[Supabase] Startup sync: {_startup}")
+except Exception as _e:
+    _SUPABASE = False
+    print(f"[Supabase] Not configured or error: {_e}")
+
 app = Flask(__name__)
 
 # ─────────────────────────────────────────────────────────────────
@@ -97,7 +107,6 @@ def api_ollama_status():
         "current_model": model_tag(cfg)
     })
 
-# Popular HuggingFace GGUF models for quick-pick
 @app.route("/api/hf/popular")
 def api_hf_popular():
     popular = [
@@ -147,21 +156,21 @@ def api_memory_clear():
 def api_skills_list():
     return jsonify(list_skills())
 
-@app.route("/api/skills/<name>", methods=["GET"])
+@app.route("/api/skills/<n>", methods=["GET"])
 def api_skill_get(name):
     content = get_skill(name)
     if content is None:
         return jsonify({"error": "Not found"}), 404
     return jsonify({"name": name, "content": content})
 
-@app.route("/api/skills/<name>", methods=["POST", "PUT"])
+@app.route("/api/skills/<n>", methods=["POST", "PUT"])
 def api_skill_save(name):
     data = request.json or {}
     content = data.get("content", "")
     save_skill(name, content)
     return jsonify({"ok": True})
 
-@app.route("/api/skills/<name>", methods=["DELETE"])
+@app.route("/api/skills/<n>", methods=["DELETE"])
 def api_skill_delete(name):
     from pathlib import Path
     path = SKILLS_DIR / f"{name}.md"
@@ -171,12 +180,57 @@ def api_skill_delete(name):
     return jsonify({"error": "Not found"}), 404
 
 # ─────────────────────────────────────────────────────────────────
+# SUPABASE API
+# ─────────────────────────────────────────────────────────────────
+@app.route("/api/supabase/status")
+def api_supabase_status():
+    if not _SUPABASE:
+        return jsonify({"status": "disabled", "message": "SUPABASE_URL or SUPABASE_KEY not set"})
+    return jsonify({"status": "ok", "message": _sb.status()})
+
+@app.route("/api/supabase/sync", methods=["POST"])
+def api_supabase_sync():
+    if not _SUPABASE:
+        return jsonify({"ok": False, "error": "Supabase not configured"})
+    data = request.json or {}
+    direction = data.get("direction", "push")
+    if direction == "pull":
+        result = _sb.sync_on_startup()
+    else:
+        result = _sb.sync_on_shutdown()
+    return jsonify({"ok": True, "result": result})
+
+@app.route("/api/supabase/chat", methods=["GET"])
+def api_supabase_chat_history():
+    if not _SUPABASE:
+        return jsonify({"messages": [], "error": "Supabase not configured"})
+    limit = int(request.args.get("limit", 50))
+    messages = _sb.pull_chat_history(limit)
+    return jsonify({"messages": messages})
+
+@app.route("/api/supabase/chat/clear", methods=["POST"])
+def api_supabase_chat_clear():
+    if not _SUPABASE:
+        return jsonify({"ok": False, "error": "Supabase not configured"})
+    ok = _sb.clear_chat_history()
+    return jsonify({"ok": ok})
+
+# ─────────────────────────────────────────────────────────────────
 # HEALTH
 # ─────────────────────────────────────────────────────────────────
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "service": "hermesbot"})
+    return jsonify({
+        "status": "ok",
+        "service": "hermesbot",
+        "supabase": "connected" if _SUPABASE else "disabled"
+    })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    try:
+        app.run(host="0.0.0.0", port=port, debug=False)
+    finally:
+        if _SUPABASE:
+            print("[Supabase] Shutdown sync...")
+            _sb.sync_on_shutdown()
