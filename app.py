@@ -74,12 +74,17 @@ def api_chat():
     def generate():
         # 3. Streaming odgovora od AI modela + skupljanje finalnog AI teksta
         full_assistant_content = ""
+        saw_done_event = False
         for chunk in chat_stream(full_messages, cfg):
             try:
                 if chunk.startswith("data: "):
                     payload = json.loads(chunk[6:].strip())
                     if payload.get("content"):
                         full_assistant_content += payload["content"]
+                    # Odgodi finalni "done" dok ne pokušamo izvršiti skill
+                    if payload.get("done") is True:
+                        saw_done_event = True
+                        continue
             except Exception:
                 # Ne prekidaj stream ako neki SSE red nije parsabilan
                 pass
@@ -89,6 +94,7 @@ def api_chat():
         skill_result = orchestrator.parse_response(full_assistant_content)
         if skill_result:
             yield f"data: {json.dumps({'tool_result': skill_result, 'tool': 'skill_orchestrator', 'done': False})}\n\n"
+        if saw_done_event:
             yield f"data: {json.dumps({'done': True})}\n\n"
 
     return Response(
