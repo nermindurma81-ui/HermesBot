@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import subprocess
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -76,3 +77,16 @@ def test_ollama_status_reports_offline_for_unreachable_host(monkeypatch):
     client = app.test_client()
     data = client.get("/api/ollama/status").get_json()
     assert data["online"] is False
+
+
+def test_deep_sanity_script():
+    root = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [sys.executable, str(root / "scripts" / "deep_sanity_check.py")],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False
+    )
+    assert proc.returncode == 0, proc.stdout + "\n" + proc.stderr
+    assert "DEEP_SANITY_OK" in proc.stdout
