@@ -1333,10 +1333,12 @@ async function loadSkills() {
     const installed = installedData.skills || [];
     const activeSet = new Set((brainData.active || []).map(x => String(x)));
     const container = document.getElementById('skillsList');
-    if(!skills.length && !pySkills.length) {
+    if(!skills.length && !pySkills.length && !installed.length) {
       container.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:20px">Nema skillova. Hermes ih kreira automatski kroz konverzaciju.</div>';
       return;
     }
+    const mdNames = new Set(skills.map(s => s.name));
+    const pyNames = new Set(pySkills);
     const mdCards = skills.map(s => `
       <div class="skill-card">
         <div class="skill-header">
@@ -1373,13 +1375,30 @@ async function loadSkills() {
           </div>
         </div>
       </div>`).join('');
+    const packCards = installed
+      .filter(s => !mdNames.has(s.name) && !pyNames.has(s.name))
+      .map(s => `
+      <div class="skill-card">
+        <div class="skill-header">
+          <div>
+            <div style="font-weight:600;font-size:13px">${s.name}</div>
+            <div style="font-size:12px;color:var(--muted)">SKILL pack</div>
+          </div>
+          <div class="skill-actions">
+            <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:4px">
+              <input type="checkbox" class="brain-skill-check" value="${s.name}" ${activeSet.has(s.name) ? 'checked' : ''}>
+              brain
+            </label>
+          </div>
+        </div>
+      </div>`).join('');
     const installedList = installed.length
       ? `<div class="card" style="margin-bottom:10px"><div class="card-desc">Instalisani skillovi (scroll)</div>
            <div style="max-height:180px;overflow:auto;margin-top:6px;font-size:12px;color:var(--muted)">
              ${installed.map(s => `<div>• ${s.name} ${s.active ? '🧠' : ''}</div>`).join('')}
            </div></div>`
       : '';
-    container.innerHTML = installedList + mdCards + pyCards;
+    container.innerHTML = installedList + mdCards + pyCards + packCards;
   } catch(e) {}
 }
 

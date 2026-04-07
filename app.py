@@ -13,7 +13,7 @@ from hermes_core.agent import (
 )
 # IMPORT: Tvoj novi Orchestrator koji pokreće .py skillove
 from orchestrator import HermesOrchestrator
-from hermes_core.skill_loader import get_active_skills, set_active_skills
+from hermes_core.skill_loader import get_active_skills, set_active_skills, list_available_skills
 
 # ── SUPABASE (optional) ───────────────────────────────────────────
 try:
@@ -473,7 +473,8 @@ def api_python_skills_list():
 def api_skills_installed():
     py_skills = set(orchestrator.list_python_skills())
     md_skills = set(s.get("name") for s in list_skills())
-    names = sorted(py_skills | md_skills)
+    pack_skills = set(s.get("name") for s in list_available_skills())
+    names = sorted(py_skills | md_skills | pack_skills)
     active = set(get_active_skills())
     return jsonify({
         "skills": [{"name": n, "active": n in active} for n in names],

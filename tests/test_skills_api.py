@@ -5,6 +5,7 @@ import types
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import app as app_module
 from app import app, _detect_public_base_url
 from orchestrator import HermesOrchestrator
 import hermes_core.agent as agent_module
@@ -319,3 +320,11 @@ def test_skills_installed_endpoint_returns_items():
     payload = r.get_json()
     assert "skills" in payload
     assert isinstance(payload["skills"], list)
+
+
+def test_skills_installed_includes_skill_packs(monkeypatch):
+    monkeypatch.setattr(app_module, "list_available_skills", lambda: [{"name": "pack_demo"}])
+    client = app.test_client()
+    payload = client.get("/api/skills/installed").get_json()
+    names = {s["name"] for s in payload["skills"]}
+    assert "pack_demo" in names

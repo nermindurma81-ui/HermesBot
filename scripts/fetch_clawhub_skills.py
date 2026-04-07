@@ -51,6 +51,7 @@ def main():
     if args.from_catalog and CATALOG.exists():
         data = json.loads(CATALOG.read_text(encoding="utf-8"))
         urls.extend(data.get("urls", []))
+        urls.extend(data.get("sources", []))
 
     urls = [u.strip() for u in urls if u.strip()]
     if not urls:
