@@ -1,0 +1,25 @@
+{
+  "bundle_name": "hermes_skill_bundle_20",
+  "sources": [
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/00_osnovno_ponasanje.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/01_web_pretrazivanje.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/02_vibe_coding.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/03_web_ui_dizajn.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/04_graficki_arhitektura_crtanje.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/05_app_web_build.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/06_photo_video_alati.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/07_enciklopedija.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/08_znanje_jezika.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/09_github_git.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/10_izvrsavanje_zadataka.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/skills_index.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/hello.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/weather.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/web_search.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/openclaw_skills.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/calculator.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/url_fetch.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/summarize_text.py",
+    "https://raw.githubusercontent.com/nermindurma81-ui/HermesBot/main/skills/currency_rate.py"
+  ]
+}
