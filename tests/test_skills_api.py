@@ -47,3 +47,10 @@ def test_connectors_status_endpoints_without_tokens():
     assert gh.status_code == 200
     assert tg.get_json()["status"] == "missing_token"
     assert gh.get_json()["status"] == "missing_token"
+
+
+def test_skill_command_requires_params():
+    orchestrator = HermesOrchestrator()
+    tool, output = orchestrator.detect_intent_and_execute('/skill web_search')
+    assert tool == "skill_error"
+    assert "Nedostaju parametri" in output

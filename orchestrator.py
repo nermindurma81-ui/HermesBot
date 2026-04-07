@@ -1,6 +1,7 @@
 import re
 import importlib.util
 import os
+import inspect
 
 class HermesOrchestrator:
     def __init__(self, skills_dir="skills"):
@@ -37,6 +38,24 @@ class HermesOrchestrator:
             
             # Poziv funkcije run() unutar skripte
             if hasattr(skill_module, 'run'):
+                # Normalizacija čestih aliasa parametara
+                if "query" not in params and "input" in params:
+                    params["query"] = params["input"]
+                if "query" not in params and "prompt" in params:
+                    params["query"] = params["prompt"]
+
+                sig = inspect.signature(skill_module.run)
+                required = [
+                    name for name, p in sig.parameters.items()
+                    if p.default is inspect._empty and p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+                ]
+
+                # Ako postoji samo jedan obavezan parametar, a korisnik nije dao key=value,
+                # tretiraj cijeli params_str kao vrijednost tog parametra.
+                if not params and len(required) == 1 and params_str.strip():
+                    raw = params_str.strip().strip("'\"")
+                    params[required[0]] = raw
+
                 result = skill_module.run(**params)
                 return str(result)
             else:
@@ -74,6 +93,8 @@ class HermesOrchestrator:
             parts = raw.split(" ", 1)
             skill_name = parts[0].strip()
             params_str = parts[1].strip() if len(parts) > 1 else ""
+            if not params_str:
+                return ("skill_error", f"❌ Nedostaju parametri za skill '{skill_name}'. Primjer: /skill {skill_name} query=\"...\"")
             return (skill_name, self.execute_skill(skill_name, params_str))
 
         # Hard rule: ako korisnik traži skillove, vrati listu postojećih Python skillova.
