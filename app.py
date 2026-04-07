@@ -195,6 +195,7 @@ def api_chat():
         def direct_generate():
             yield f"data: {json.dumps({'tool_call': tool_name, 'args': {'input': last_user_msg}, 'done': False})}\n\n"
             yield f"data: {json.dumps({'tool_result': tool_output, 'tool': tool_name, 'done': False})}\n\n"
+            yield f"data: {json.dumps({'content': str(tool_output), 'done': False})}\n\n"
             yield f"data: {json.dumps({'done': True})}\n\n"
 
         return Response(

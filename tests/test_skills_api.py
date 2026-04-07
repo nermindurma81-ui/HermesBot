@@ -54,3 +54,18 @@ def test_skill_command_requires_params():
     tool, output = orchestrator.detect_intent_and_execute('/skill web_search')
     assert tool == "skill_error"
     assert "Nedostaju parametri" in output
+
+
+def test_auto_router_prefers_web_search_for_lookup_queries():
+    orchestrator = HermesOrchestrator()
+    tool, output = orchestrator.detect_intent_and_execute("Nadji cijenu passata 1.9 tdi")
+    assert tool == "web_search"
+    assert isinstance(output, str)
+
+
+def test_chat_direct_skill_stream_includes_content_chunk():
+    client = app.test_client()
+    resp = client.post("/api/chat", json={"messages": [{"role": "user", "content": "Nadji informacije o Python programming language"}]})
+    body = resp.data.decode("utf-8")
+    assert '"tool_call": "web_search"' in body
+    assert '"content":' in body

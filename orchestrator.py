@@ -73,6 +73,31 @@ class HermesOrchestrator:
             if f.endswith(".py")
         )
 
+    def _actionable_skills(self):
+        # Izbaci "numeričke" wrappere koji su više dokumentacija nego izvršni alati
+        return [
+            s for s in self.list_python_skills()
+            if not re.match(r"^\d+_", s) and s not in {"skills_index"}
+        ]
+
+    def _infer_skill_from_context(self, text: str):
+        low = (text or "").lower()
+        actionable = self._actionable_skills()
+        if not actionable:
+            return None
+
+        keyword_map = [
+            ("weather", ["vrijeme", "weather", "temperatura", "kiša", "kisa", "vjetar"]),
+            ("web_search", ["nađi", "nadji", "pretraži", "pretrazi", "search", "cijena", "koliko košta", "info", "najbolje"]),
+            ("openclaw_skills", ["openclaw", "skill market", "market", "katalog skillova"]),
+            ("hello", ["pozdrav", "hello", "bok", "cao"]),
+        ]
+        for skill, kws in keyword_map:
+            if skill in actionable and any(k in low for k in kws):
+                return skill
+
+        return None
+
     def _extract_weather_location(self, text: str):
         # Primjeri: "kakvo je vrijeme u Splitu", "weather in Paris"
         m = re.search(r"(?:vrijeme|weather)\s+(?:u|za|in)\s+([A-Za-zČĆŽŠĐčćžšđ\-\s]+)\??", text, re.IGNORECASE)
@@ -119,6 +144,13 @@ class HermesOrchestrator:
         if loc and "weather" in self.list_python_skills():
             result = self.execute_skill("weather", f'location="{loc}"')
             return ("weather", result)
+
+        # Kontekstualni auto-router: izaberi najkorisniji skill prema upitu
+        inferred = self._infer_skill_from_context(text)
+        if inferred == "web_search":
+            return ("web_search", self.execute_skill("web_search", f'query="{text}"'))
+        if inferred:
+            return (inferred, self.execute_skill(inferred, text))
 
         return None
 
