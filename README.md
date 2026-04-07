@@ -135,5 +135,58 @@ Ako želiš da radi i druga opcija bez izmjene frontenda:
 
 Hermes prvo pokušava Ollama; ako Ollama nije dostupan, automatski prelazi na HF Space `/v1/chat/completions`.
 
+### HF Space: brzi postupak + direktni linkovi
+
+Ako na HF Space vidiš `{"detail":"Not Found"}` na `/`, to je normalno ako nisi definisao root rutu. Bitno je da rade `/health` i `/v1/chat/completions`.
+
+1. Kreiraj Docker Space:  
+   https://huggingface.co/new-space
+2. U browseru kreiraj fajlove (zamijeni `<owner>` i `<space>`):
+   - `app.py`: `https://huggingface.co/spaces/<owner>/<space>/new/main?filename=app.py`
+   - `requirements.txt`: `https://huggingface.co/spaces/<owner>/<space>/new/main?filename=requirements.txt`
+   - `Dockerfile`: `https://huggingface.co/spaces/<owner>/<space>/new/main?filename=Dockerfile`
+3. Nakon builda testiraj:
+   - Health: `https://<space>.hf.space/health`
+   - Chat endpoint: `https://<space>.hf.space/v1/chat/completions`
+4. Railway (Hermes app) env:
+   - `HF_SPACE_BASE_URL=https://<space>.hf.space`
+   - `HF_SPACE_MODEL=default` (opcionalno)
+   - `HF_SPACE_API_KEY=...` (samo ako je Space private)
+
+Primjer test poziva:
+
+```bash
+curl -X POST "https://<space>.hf.space/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"default","messages":[{"role":"user","content":"Pozdrav"}]}'
+```
+
+### Gotovi fajlovi u ovom repo-u (copy/paste za HF Space)
+
+Ako želiš da ne pišeš ručno, koristi ove fajlove direktno:
+
+- `deploy/hf-space-gateway/app.py`
+- `deploy/hf-space-gateway/requirements.txt`
+- `deploy/hf-space-gateway/Dockerfile`
+
+Direktni GitHub linkovi:
+
+- <https://github.com/nermindurma81-ui/HermesBot/blob/main/deploy/hf-space-gateway/app.py>
+- <https://github.com/nermindurma81-ui/HermesBot/blob/main/deploy/hf-space-gateway/requirements.txt>
+- <https://github.com/nermindurma81-ui/HermesBot/blob/main/deploy/hf-space-gateway/Dockerfile>
+
+U ovom template-u je dodata i `GET /` ruta (vrati JSON status), tako da više nećeš dobijati 404 na root putanji.
+
+### Brzi check za tvoj konkretan Space
+
+Ako je Space naziv `nermind/hermes-openai-gateway`, testiraj baš ove URL-ove:
+
+- `https://huggingface.co/spaces/nermind/hermes-openai-gateway` (repo stranica)
+- `https://nermind-hermes-openai-gateway.hf.space/` (root)
+- `https://nermind-hermes-openai-gateway.hf.space/health`
+- `https://nermind-hermes-openai-gateway.hf.space/v1/chat/completions`
+
+Ako root i dalje vraća 404, znači da `app.py` u tom Space-u još nema `@app.get("/")` rutu ili nije deployan najnoviji commit.
+
 ## Licenca
 MIT
