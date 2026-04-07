@@ -287,8 +287,17 @@ def api_delete_model():
 def api_ollama_status():
     cfg = get_cfg()
     models = ollama_list_models(cfg["ollama_host"])
+    online = len(models) > 0
+    # Ako nema modela, Ollama i dalje može biti online — probaj health ping
+    if not online:
+        try:
+            import httpx
+            r = httpx.get(f"{cfg['ollama_host'].rstrip('/')}/api/tags", timeout=4)
+            online = r.status_code == 200
+        except Exception:
+            online = False
     return jsonify({
-        "online": len(models) >= 0,
+        "online": online,
         "host": cfg["ollama_host"],
         "model_count": len(models),
         "current_model": model_tag(cfg)
