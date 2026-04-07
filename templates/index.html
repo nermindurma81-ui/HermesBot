@@ -140,6 +140,13 @@ body{
   background:var(--bg2);border-top:1px solid var(--border);
   display:flex;gap:8px;align-items:flex-end;flex-shrink:0;
 }
+.chat-actions{display:flex;gap:8px;align-items:center}
+.ghost-btn{
+  width:42px;height:42px;border-radius:12px;
+  background:var(--bg3);border:1px solid var(--border);
+  color:var(--text);cursor:pointer;
+}
+.ghost-btn:hover{border-color:var(--accent)}
 .chat-input{
   flex:1;background:var(--bg3);border:1px solid var(--border);
   color:var(--text);font-family:var(--font);font-size:14px;
@@ -290,6 +297,7 @@ body{
 .skill-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
 .skill-actions{display:flex;gap:6px}
 #skill-editor{display:none;margin-top:10px}
+#skillsList{max-height:50dvh;overflow:auto;padding-right:4px}
 .skill-editor-content{
   width:100%;background:var(--bg3);border:1px solid var(--border);
   color:var(--text);font-family:var(--mono);font-size:12px;
@@ -382,7 +390,12 @@ body{
         rows="1"
         onkeydown="handleKey(event)"
         oninput="autoResize(this)"></textarea>
-      <button class="send-btn" id="sendBtn" onclick="sendMessage()">↑</button>
+      <div class="chat-actions">
+        <input type="file" id="chatFileInput" style="display:none" onchange="uploadChatFile(event)">
+        <button class="ghost-btn" onclick="document.getElementById('chatFileInput').click()">📎</button>
+        <button class="ghost-btn" id="stopBtn" onclick="stopGeneration()" disabled>■</button>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()">↑</button>
+      </div>
     </div>
   </div>
 
@@ -718,6 +731,7 @@ body{
 let messages = [];
 let isStreaming = false;
 let config = {};
+let activeController = null;
 
 // ── INIT ─────────────────────────────────────────────────────────
 async function init() {
@@ -878,6 +892,8 @@ async function sendMessageWithText(text) {
   if(isStreaming) return;
   isStreaming = true;
   document.getElementById('sendBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+  activeController = new AbortController();
 
   messages.push({role:'user', content: text});
   appendMsg('user', text);
@@ -890,7 +906,8 @@ async function sendMessageWithText(text) {
     const resp = await fetch('/api/chat', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({messages})
+      body: JSON.stringify({messages}),
+      signal: activeController.signal
     });
 
     removeEl(typingId);
@@ -934,11 +951,45 @@ async function sendMessageWithText(text) {
     }
   } catch(e) {
     removeEl(typingId);
-    appendMsg('assistant', `❌ Greška: ${e.message}`);
+    if(e.name === 'AbortError') {
+      appendMsg('assistant', '⏹ Generacija zaustavljena.');
+    } else {
+      appendMsg('assistant', `❌ Greška: ${e.message}`);
+    }
   } finally {
     isStreaming = false;
+    activeController = null;
     document.getElementById('sendBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
     scrollToBottom();
+  }
+}
+
+function stopGeneration() {
+  if(activeController) activeController.abort();
+}
+
+async function uploadChatFile(event) {
+  const file = event.target.files?.[0];
+  if(!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const r = await fetch('/api/chat/upload', {method:'POST', body: fd});
+    const d = await r.json();
+    if(!d.ok) {
+      toast('Upload greška: ' + (d.error || 'nepoznato'));
+      return;
+    }
+    const text = `[UPLOAD]\nfilename: ${d.filename}\nsize: ${d.size}\n${d.preview ? 'preview:\\n' + d.preview : 'binary file (no preview)'}`;
+    const input = document.getElementById('chatInput');
+    input.value = text;
+    autoResize(input);
+    toast('✅ Fajl učitan');
+  } catch(e) {
+    toast('❌ Upload failed: ' + e.message);
+  } finally {
+    event.target.value = '';
   }
 }
 
@@ -1219,19 +1270,24 @@ async function clearMemory() {
 // ── SKILLS ───────────────────────────────────────────────────────
 async function loadSkills() {
   try {
-    const r = await fetch('/api/skills');
-    const skills = await r.json();
+    const [rMd, rPy] = await Promise.all([
+      fetch('/api/skills'),
+      fetch('/api/skills/python')
+    ]);
+    const skills = await rMd.json();
+    const pyData = await rPy.json();
+    const pySkills = pyData.skills || [];
     const container = document.getElementById('skillsList');
-    if(!skills.length) {
+    if(!skills.length && !pySkills.length) {
       container.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:20px">Nema skillova. Hermes ih kreira automatski kroz konverzaciju.</div>';
       return;
     }
-    container.innerHTML = skills.map(s => `
+    const mdCards = skills.map(s => `
       <div class="skill-card">
         <div class="skill-header">
           <div>
             <div style="font-weight:600;font-size:13px">${s.name}</div>
-            <div style="font-size:12px;color:var(--muted)">${s.title}</div>
+            <div style="font-size:12px;color:var(--muted)">MD · ${s.title}</div>
           </div>
           <div class="skill-actions">
             <button class="btn btn-danger btn-sm" onclick="deleteSkill('${s.name}')">🗑</button>
@@ -1242,6 +1298,19 @@ async function loadSkills() {
           ${escHtml(s.content.substring(0,120))}...
         </div>
       </div>`).join('');
+    const pyCards = pySkills.map(name => `
+      <div class="skill-card">
+        <div class="skill-header">
+          <div>
+            <div style="font-weight:600;font-size:13px">${name}</div>
+            <div style="font-size:12px;color:var(--muted)">PY skill</div>
+          </div>
+          <div class="skill-actions">
+            <button class="btn btn-danger btn-sm" onclick="deleteSkill('${name}')">🗑</button>
+          </div>
+        </div>
+      </div>`).join('');
+    container.innerHTML = mdCards + pyCards;
   } catch(e) {}
 }
 

@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app import app
+from orchestrator import HermesOrchestrator
 
 
 def test_skills_market_and_python_listing():
@@ -29,3 +30,10 @@ def test_skill_get_supports_python_files():
     payload = response.get_json()
     assert payload["type"] in ("python", "markdown")
     assert "run(" in payload["content"]
+
+
+def test_explicit_skill_command_format():
+    orchestrator = HermesOrchestrator()
+    tool, output = orchestrator.detect_intent_and_execute('/skill hello name="Nermin"')
+    assert tool == "hello"
+    assert "Nermin" in output

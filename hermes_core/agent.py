@@ -244,6 +244,11 @@ def chat_stream(messages: list, cfg: dict) -> Iterator[str]:
 
                 tool_calls_buffer = []
                 full_content = ""
+                last_user_text = ""
+                for m in reversed(messages):
+                    if m.get("role") == "user":
+                        last_user_text = (m.get("content") or "").lower()
+                        break
 
                 for line in resp.iter_lines():
                     if not line:
@@ -281,7 +286,13 @@ def chat_stream(messages: list, cfg: dict) -> Iterator[str]:
                                     try: args = json.loads(args)
                                     except: args = {}
                                 yield f"data: {json.dumps({'tool_call': name, 'args': args, 'done': False})}\n\n"
-                                result = execute_tool(name, args, cfg)
+                                # Safety gate: skupe/strukturne alate dozvoli samo kad ih korisnik eksplicitno traži
+                                if name == "pull_model" and not any(k in last_user_text for k in ["pull", "povuci model", "instaliraj model", "download model"]):
+                                    result = "⛔ pull_model blokiran: korisnik nije eksplicitno tražio instalaciju modela."
+                                elif name == "create_skill" and not any(k in last_user_text for k in ["create skill", "napravi skill", "kreiraj skill", "update skill", "azuriraj skill"]):
+                                    result = "⛔ create_skill blokiran: korisnik nije eksplicitno tražio kreiranje/izmjenu skilla."
+                                else:
+                                    result = execute_tool(name, args, cfg)
                                 yield f"data: {json.dumps({'tool_result': result, 'tool': name, 'done': False})}\n\n"
 
                             # Auto-save memory if long conversation

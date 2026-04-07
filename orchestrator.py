@@ -66,6 +66,16 @@ class HermesOrchestrator:
         text = (user_text or "").strip()
         low = text.lower()
 
+        # Eksplicitna komanda: /skill ime param="x"
+        if low.startswith("/skill "):
+            raw = text[len("/skill "):].strip()
+            if not raw:
+                return ("skill_error", "❌ Koristi format: /skill ime_skilla param=\"vrijednost\"")
+            parts = raw.split(" ", 1)
+            skill_name = parts[0].strip()
+            params_str = parts[1].strip() if len(parts) > 1 else ""
+            return (skill_name, self.execute_skill(skill_name, params_str))
+
         # Hard rule: ako korisnik traži skillove, vrati listu postojećih Python skillova.
         skill_keywords = [
             "koristi skill", "koristi skillove", "prikaži skill", "koji su skillovi",
@@ -75,7 +85,7 @@ class HermesOrchestrator:
             skills = self.list_python_skills()
             if not skills:
                 return ("list_skills", "Nema dostupnih Python skillova.")
-            return ("list_skills", "Dostupni Python skillovi: " + ", ".join(skills))
+            return ("list_skills", "Dostupni Python skillovi:\n- " + "\n- ".join(skills) + "\n\nZa eksplicitan poziv koristi: /skill ime_skilla param=\"vrijednost\"")
 
         if "openclaw" in low and "openclaw_skills" in self.list_python_skills():
             return ("openclaw_skills", self.execute_skill("openclaw_skills", 'action="categories"'))

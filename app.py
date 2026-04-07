@@ -25,6 +25,8 @@ except Exception as _e:
     print(f"[Supabase] Not configured or error: {_e}")
 
 app = Flask(__name__)
+UPLOADS_DIR = SKILLS_DIR.parent / "uploads"
+UPLOADS_DIR.mkdir(exist_ok=True)
 # Inicijalizacija izvršitelja skillova
 orchestrator = HermesOrchestrator()
 
@@ -55,6 +57,33 @@ def _market_catalog():
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/api/chat/upload", methods=["POST"])
+def api_chat_upload():
+    if "file" not in request.files:
+        return jsonify({"ok": False, "error": "Missing file field"}), 400
+
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"ok": False, "error": "Empty filename"}), 400
+
+    safe_name = _safe_skill_name(os.path.splitext(f.filename)[0]) or "upload"
+    ext = os.path.splitext(f.filename)[1][:12]
+    target = UPLOADS_DIR / f"{safe_name}{ext}"
+    f.save(target)
+
+    size = target.stat().st_size
+    preview = ""
+    if ext.lower() in {".txt", ".md", ".json", ".csv", ".py", ".log"}:
+        preview = target.read_text(encoding="utf-8", errors="ignore")[:4000]
+
+    return jsonify({
+        "ok": True,
+        "filename": target.name,
+        "size": size,
+        "preview": preview
+    })
 
 # ─────────────────────────────────────────────────────────────────
 # CONFIG API
