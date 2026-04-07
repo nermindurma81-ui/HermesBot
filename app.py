@@ -57,6 +57,23 @@ def api_chat():
     data = request.json or {}
     messages = data.get("messages", [])
     cfg = get_cfg()
+    last_user_msg = messages[-1]["content"] if messages else ""
+
+    # 0. Hard skill-first ruta za jasne upite (npr. "koristi skillove", "vrijeme u X")
+    direct_skill = orchestrator.detect_intent_and_execute(last_user_msg)
+    if direct_skill:
+        tool_name, tool_output = direct_skill
+
+        def direct_generate():
+            yield f"data: {json.dumps({'tool_call': tool_name, 'args': {'input': last_user_msg}, 'done': False})}\n\n"
+            yield f"data: {json.dumps({'tool_result': tool_output, 'tool': tool_name, 'done': False})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+        return Response(
+            stream_with_context(direct_generate()),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+        )
 
     # 1. Učitavanje System Prompta (Kataloga)
     system_prompt_path = "system_prompt.txt"

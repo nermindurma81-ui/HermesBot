@@ -45,6 +45,46 @@ class HermesOrchestrator:
         except Exception as e:
             return f"⚠️ Skill Execution Error: {str(e)}"
 
+    def list_python_skills(self):
+        if not os.path.exists(self.skills_dir):
+            return []
+        return sorted(
+            os.path.splitext(f)[0]
+            for f in os.listdir(self.skills_dir)
+            if f.endswith(".py")
+        )
+
+    def _extract_weather_location(self, text: str):
+        # Primjeri: "kakvo je vrijeme u Splitu", "weather in Paris"
+        m = re.search(r"(?:vrijeme|weather)\s+(?:u|za|in)\s+([A-Za-zČĆŽŠĐčćžšđ\-\s]+)\??", text, re.IGNORECASE)
+        if not m:
+            return None
+        location = m.group(1).strip(" .,!?:;")
+        return location if location else None
+
+    def detect_intent_and_execute(self, user_text: str):
+        text = (user_text or "").strip()
+        low = text.lower()
+
+        # Hard rule: ako korisnik traži skillove, vrati listu postojećih Python skillova.
+        skill_keywords = [
+            "koristi skill", "koristi skillove", "prikaži skill", "koji su skillovi",
+            "koje skillove", "use skills", "list skills", "skills"
+        ]
+        if any(k in low for k in skill_keywords):
+            skills = self.list_python_skills()
+            if not skills:
+                return ("list_skills", "Nema dostupnih Python skillova.")
+            return ("list_skills", "Dostupni Python skillovi: " + ", ".join(skills))
+
+        # Hard rule: vrijeme ide direktno preko weather skilla (ako postoji lokacija)
+        loc = self._extract_weather_location(text)
+        if loc and "weather" in self.list_python_skills():
+            result = self.execute_skill("weather", f'location="{loc}"')
+            return ("weather", result)
+
+        return None
+
     def parse_response(self, ai_text):
         """
         Traži format [skill_name](params) u tekstu koji je AI generirao.
