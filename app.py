@@ -1,110 +1,182 @@
-from flask import Flask, render_template, request, jsonify
 import os
-import sys
-import logging
-
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-from hermes_core.agent import HermesAgent
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import json
+import asyncio
+import threading
+from flask import Flask, request, jsonify, render_template, Response, stream_with_context
+from hermes_core.agent import (
+    get_cfg, model_tag, chat_stream,
+    ollama_list_models, ollama_pull_stream, ollama_delete_model,
+    load_memory, save_memory, list_skills, save_skill, get_skill,
+    append_memory, MEMORY_FILE, SKILLS_DIR
+)
 
 app = Flask(__name__)
 
-# Config
-PORT = int(os.environ.get("PORT", 5000))
-HF_MODEL = os.environ.get("HF_MODEL", 'bartowski/Llama-3.2-1B-Instruct-GGUF')
-HF_QUANT = os.environ.get("HF_QUANT", 'Q4_K_M')
-BOT_NAME = os.environ.get("BOT_NAME", 'Hermes')
-MEMORY_ENABLED = os.environ.get("MEMORY_ENABLED", 'true').lower() == 'true'
-MAX_CONTEXT_MESSAGES = int(os.environ.get("MAX_CONTEXT_MESSAGES", 20))
-
-# Initialize agent
-agent = HermesAgent()
-
-@app.route('/')
+# ─────────────────────────────────────────────────────────────────
+# PAGES
+# ─────────────────────────────────────────────────────────────────
+@app.route("/")
 def index():
-    return render_template('index.html', bot_name=BOT_NAME)
+    return render_template("index.html")
 
-@app.route('/api/chat', methods=['POST'])
-def chat():
-    data = request.get_json()
-    message = data.get('message', '')
-    
-    if not message:
-        return jsonify({'error': 'Empty message'}), 400
-    
+# ─────────────────────────────────────────────────────────────────
+# CONFIG API
+# ─────────────────────────────────────────────────────────────────
+@app.route("/api/config")
+def api_config():
+    cfg = get_cfg()
+    safe = {}
+    for k, v in cfg.items():
+        if k.endswith(("_token", "_key")) and v:
+            safe[k] = "***set***"
+        else:
+            safe[k] = v
+    safe["model_tag"] = model_tag(cfg)
+    return jsonify(safe)
+
+# ─────────────────────────────────────────────────────────────────
+# CHAT API (streaming SSE)
+# ─────────────────────────────────────────────────────────────────
+@app.route("/api/chat", methods=["POST"])
+def api_chat():
+    data = request.json or {}
+    messages = data.get("messages", [])
+    cfg = get_cfg()
+
     def generate():
-        try:
-            for chunk in agent.chat_stream(message):
-                yield chunk
-        except Exception as e:
-            logger.error(f"Chat error: {e}")
-            yield f"Error: {str(e)}"
-    
-    return app.response_class(generate(), mimetype='text/plain')
+        yield from chat_stream(messages, cfg)
 
-@app.route('/api/models', methods=['GET'])
-def list_models():
-    try:
-        import requests
-        response = requests.get('http://localhost:11434/api/tags')
-        return jsonify(response.json())
-    except:
-        return jsonify({'models': []})
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
-@app.route('/api/pull', methods=['POST'])
-def pull_model():
-    data = request.get_json()
-    model = data.get('model', '')
-    quant = data.get('quant', '')
-    
-    if not model or not quant:
-        return jsonify({'error': 'Missing model or quant'}), 400
-    
-    full_model = f"hf.co/{model}:{quant}"
-    
+# ─────────────────────────────────────────────────────────────────
+# OLLAMA / MODELS API
+# ─────────────────────────────────────────────────────────────────
+@app.route("/api/models")
+def api_models():
+    cfg = get_cfg()
+    models = ollama_list_models(cfg["ollama_host"])
+    return jsonify({"models": models, "current": model_tag(cfg)})
+
+@app.route("/api/models/pull", methods=["POST"])
+def api_pull():
+    data = request.json or {}
+    model = data.get("model", "")
+    cfg = get_cfg()
+    if not model:
+        model = model_tag(cfg)
+
     def generate():
-        import requests
-        try:
-            response = requests.post(
-                'http://localhost:11434/api/pull',
-                json={'name': full_model},
-                stream=True
-            )
-            for line in response.iter_lines():
-                if line:
-                    yield line.decode('utf-8') + '\n'
-        except Exception as e:
-            yield f'{{"error": "{str(e)}"}}\n'
-    
-    return app.response_class(generate(), mimetype='application/json')
+        yield from ollama_pull_stream(model, cfg["ollama_host"])
 
-@app.route('/api/memory', methods=['GET'])
-def get_memory():
-    try:
-        memory = agent.recall_memory("")
-        return jsonify({'memory': memory})
-    except:
-        return jsonify({'memory': ''})
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
-@app.route('/api/memory/clear', methods=['POST'])
-def clear_memory():
-    try:
-        agent.memory = []
-        return jsonify({'success': True})
-    except:
-        return jsonify({'success': False})
+@app.route("/api/models/delete", methods=["POST"])
+def api_delete_model():
+    data = request.json or {}
+    model = data.get("model", "")
+    cfg = get_cfg()
+    result = ollama_delete_model(model, cfg["ollama_host"])
+    return jsonify(result)
 
-@app.route('/api/status', methods=['GET'])
-def status():
-    try:
-        import requests
-        response = requests.get('http://localhost:11434/api/version', timeout=2)
-        return jsonify({'ollama': 'running', 'version': response.json()})
-    except:
-        return jsonify({'ollama': 'offline'})
+@app.route("/api/ollama/status")
+def api_ollama_status():
+    cfg = get_cfg()
+    models = ollama_list_models(cfg["ollama_host"])
+    return jsonify({
+        "online": len(models) >= 0,
+        "host": cfg["ollama_host"],
+        "model_count": len(models),
+        "current_model": model_tag(cfg)
+    })
+
+# Popular HuggingFace GGUF models for quick-pick
+@app.route("/api/hf/popular")
+def api_hf_popular():
+    popular = [
+        {"id": "bartowski/Llama-3.2-1B-Instruct-GGUF",   "quants": ["Q4_K_M","Q8_0","IQ3_M"], "size": "1B",  "desc": "Fast, lightweight"},
+        {"id": "bartowski/Llama-3.2-3B-Instruct-GGUF",   "quants": ["Q4_K_M","Q8_0","IQ3_M"], "size": "3B",  "desc": "Balanced speed/quality"},
+        {"id": "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF", "quants": ["Q4_K_M","Q5_K_M","Q8_0"], "size": "8B", "desc": "High quality"},
+        {"id": "bartowski/Mistral-7B-Instruct-v0.3-GGUF","quants": ["Q4_K_M","Q5_K_M","Q8_0"], "size": "7B",  "desc": "Mistral v0.3"},
+        {"id": "bartowski/gemma-2-2b-it-GGUF",            "quants": ["Q4_K_M","Q8_0"],           "size": "2B",  "desc": "Google Gemma 2"},
+        {"id": "bartowski/Phi-3.5-mini-instruct-GGUF",   "quants": ["Q4_K_M","Q8_0"],           "size": "3.8B","desc": "Microsoft Phi-3.5"},
+        {"id": "mlabonne/Meta-Llama-3.1-8B-Instruct-abliterated-GGUF", "quants": ["Q4_K_M","Q8_0"], "size": "8B", "desc": "Uncensored Llama"},
+        {"id": "arcee-ai/SuperNova-Medius-GGUF",          "quants": ["Q4_K_M","Q8_0"],           "size": "14B", "desc": "SuperNova Medius"},
+        {"id": "bartowski/Qwen2.5-7B-Instruct-GGUF",     "quants": ["Q4_K_M","Q5_K_M","Q8_0"], "size": "7B",  "desc": "Qwen 2.5"},
+        {"id": "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF","quants":["Q4_K_M","Q8_0"],         "size": "7B",  "desc": "DeepSeek R1 Distill"},
+    ]
+    return jsonify(popular)
+
+# ─────────────────────────────────────────────────────────────────
+# MEMORY API
+# ─────────────────────────────────────────────────────────────────
+@app.route("/api/memory", methods=["GET"])
+def api_memory_get():
+    return jsonify({"memory": load_memory()})
+
+@app.route("/api/memory", methods=["POST"])
+def api_memory_post():
+    data = request.json or {}
+    content = data.get("content", "")
+    save_memory(content)
+    return jsonify({"ok": True})
+
+@app.route("/api/memory/append", methods=["POST"])
+def api_memory_append():
+    data = request.json or {}
+    note = data.get("note", "")
+    append_memory(note)
+    return jsonify({"ok": True})
+
+@app.route("/api/memory/clear", methods=["POST"])
+def api_memory_clear():
+    save_memory("")
+    return jsonify({"ok": True})
+
+# ─────────────────────────────────────────────────────────────────
+# SKILLS API
+# ─────────────────────────────────────────────────────────────────
+@app.route("/api/skills", methods=["GET"])
+def api_skills_list():
+    return jsonify(list_skills())
+
+@app.route("/api/skills/<name>", methods=["GET"])
+def api_skill_get(name):
+    content = get_skill(name)
+    if content is None:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({"name": name, "content": content})
+
+@app.route("/api/skills/<name>", methods=["POST", "PUT"])
+def api_skill_save(name):
+    data = request.json or {}
+    content = data.get("content", "")
+    save_skill(name, content)
+    return jsonify({"ok": True})
+
+@app.route("/api/skills/<name>", methods=["DELETE"])
+def api_skill_delete(name):
+    from pathlib import Path
+    path = SKILLS_DIR / f"{name}.md"
+    if path.exists():
+        path.unlink()
+        return jsonify({"ok": True})
+    return jsonify({"error": "Not found"}), 404
+
+# ─────────────────────────────────────────────────────────────────
+# HEALTH
+# ─────────────────────────────────────────────────────────────────
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok", "service": "hermesbot"})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT, debug=False)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
