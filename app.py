@@ -2,7 +2,7 @@ import os
 import json
 import asyncio
 import threading
-import re  # DODANO: Za prepoznavanje [skill](params)
+import re  # Za prepoznavanje [skill](params)
 from flask import Flask, request, jsonify, render_template, Response, stream_with_context
 from hermes_core.agent import (
     get_cfg, model_tag, chat_stream,
@@ -10,7 +10,7 @@ from hermes_core.agent import (
     load_memory, save_memory, list_skills, save_skill, get_skill,
     append_memory, MEMORY_FILE, SKILLS_DIR
 )
-# DODANO: Importamo naš novi Orchestrator (moraš ga imati kao orchestrator.py)
+# IMPORT: Tvoj novi Orchestrator koji pokreće .py skillove
 from orchestrator import HermesOrchestrator
 
 # ── SUPABASE (optional) ───────────────────────────────────────────
@@ -24,7 +24,8 @@ except Exception as _e:
     print(f"[Supabase] Not configured or error: {_e}")
 
 app = Flask(__name__)
-orchestrator = HermesOrchestrator() # Inicijalizacija izvršitelja
+# Inicijalizacija izvršitelja skillova
+orchestrator = HermesOrchestrator()
 
 # ─────────────────────────────────────────────────────────────────
 # PAGES
@@ -49,7 +50,7 @@ def api_config():
     return jsonify(safe)
 
 # ─────────────────────────────────────────────────────────────────
-# CHAT API (streaming SSE) - OVDJE JE GLAVNA PROMJENA
+# CHAT API (streaming SSE) - SA SISTEM PROMPTOM I SKILLOVIMA
 # ─────────────────────────────────────────────────────────────────
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
@@ -57,20 +58,33 @@ def api_chat():
     messages = data.get("messages", [])
     cfg = get_cfg()
 
+    # 1. Učitavanje System Prompta (Kataloga)
+    system_prompt_path = "system_prompt.txt"
+    system_content = ""
+    if os.path.exists(system_prompt_path):
+        with open(system_prompt_path, "r", encoding="utf-8") as f:
+            system_content = f.read()
+
+    # 2. Priprema poruka za AI (ubacujemo prompt na početak)
+    if system_content:
+        full_messages = [{"role": "system", "content": system_content}] + messages
+    else:
+        full_messages = messages
+
     def generate():
-        # 1. Prvo dobijemo odgovor od AI modela (streaming)
-        for chunk in chat_stream(messages, cfg):
-            # Čekamo da AI završi cijelu rečenicu/odgovor da bismo provjerili skillove
-            # Napomena: U streaming modu, najbolje je provjeriti skillove 
-            # nakon što se stream završi ili u zasebnom koraku.
+        # 3. Streaming odgovora od AI modela
+        for chunk in chat_stream(full_messages, cfg):
             yield chunk
 
-        # 2. Provjera skillova (Post-processing)
-        # Uzimamo zadnju poruku AI-ja da vidimo je li pozvao skill
+        # 4. Provjera je li AI pozvao skill (nakon što završi streaming)
+        # Uzimamo zadnju poruku koju je AI generirao u ovom razgovoru
         last_ai_msg = messages[-1]["content"] if messages else ""
+        
+        # Ako je AI napisao npr. [weather](location='Split')
         skill_result = orchestrator.parse_response(last_ai_msg)
         
         if skill_result:
+            # Ako je skill pronađen, šaljemo poseban SSE event koji tvoj UI treba prepoznati
             yield f"data: {json.dumps({'type': 'skill_result', 'content': skill_result})}\n\n"
 
     return Response(
