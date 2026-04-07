@@ -72,20 +72,24 @@ def api_chat():
         full_messages = messages
 
     def generate():
-        # 3. Streaming odgovora od AI modela
+        # 3. Streaming odgovora od AI modela + skupljanje finalnog AI teksta
+        full_assistant_content = ""
         for chunk in chat_stream(full_messages, cfg):
+            try:
+                if chunk.startswith("data: "):
+                    payload = json.loads(chunk[6:].strip())
+                    if payload.get("content"):
+                        full_assistant_content += payload["content"]
+            except Exception:
+                # Ne prekidaj stream ako neki SSE red nije parsabilan
+                pass
             yield chunk
 
-        # 4. Provjera je li AI pozvao skill (nakon što završi streaming)
-        # Uzimamo zadnju poruku koju je AI generirao u ovom razgovoru
-        last_ai_msg = messages[-1]["content"] if messages else ""
-        
-        # Ako je AI napisao npr. [weather](location='Split')
-        skill_result = orchestrator.parse_response(last_ai_msg)
-        
+        # 4. Provjera je li AI vratio [skill](...) obrazac i izvršavanje Python skilla
+        skill_result = orchestrator.parse_response(full_assistant_content)
         if skill_result:
-            # Ako je skill pronađen, šaljemo poseban SSE event koji tvoj UI treba prepoznati
-            yield f"data: {json.dumps({'type': 'skill_result', 'content': skill_result})}\n\n"
+            yield f"data: {json.dumps({'tool_result': skill_result, 'tool': 'skill_orchestrator', 'done': False})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
 
     return Response(
         stream_with_context(generate()),
@@ -187,21 +191,21 @@ def api_memory_clear():
 def api_skills_list():
     return jsonify(list_skills())
 
-@app.route("/api/skills/<n>", methods=["GET"])
+@app.route("/api/skills/<name>", methods=["GET"])
 def api_skill_get(name):
     content = get_skill(name)
     if content is None:
         return jsonify({"error": "Not found"}), 404
     return jsonify({"name": name, "content": content})
 
-@app.route("/api/skills/<n>", methods=["POST", "PUT"])
+@app.route("/api/skills/<name>", methods=["POST", "PUT"])
 def api_skill_save(name):
     data = request.json or {}
     content = data.get("content", "")
     save_skill(name, content)
     return jsonify({"ok": True})
 
-@app.route("/api/skills/<n>", methods=["DELETE"])
+@app.route("/api/skills/<name>", methods=["DELETE"])
 def api_skill_delete(name):
     from pathlib import Path
     path = SKILLS_DIR / f"{name}.md"
