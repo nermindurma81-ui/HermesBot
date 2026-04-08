@@ -1,421 +1,523 @@
-"""
-Hermes Agent Core
-- Ollama backend with HuggingFace GGUF models (hf.co/user/repo:quant)
-- Persistent memory (MEMORY.md)
-- Skills system
-- Agentic tool loop (web search, file ops, code exec)
-- Streaming responses
-"""
+# hermes_core/agent.py
+# HermesBot — Kompletan AI Agent Engine
+# Ollama (primary) + HuggingFace Inference API (fallback)
+
 import os
 import json
 import datetime
-import httpx
+import requests
 from pathlib import Path
-from typing import Iterator, Optional
-from hermes_core.skill_loader import (
-    detect_relevant_skills,
-    build_skill_context,
-    inject_skills_into_system_prompt,
-    list_available_skills,
-    get_active_skills,
-    load_skill as load_skill_markdown_pack,
-    save_skill as save_skill_markdown_pack,
+from typing import Generator, Optional
+
+# ─── Konfiguracija ────────────────────────────────────────────────────────────
+
+OLLAMA_HOST   = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL  = os.environ.get("OLLAMA_MODEL", "llama3.2")
+HF_TOKEN      = os.environ.get("HF_TOKEN", "")
+HF_MODEL      = os.environ.get("HF_MODEL", "google/gemma-3-4b-it")
+BOT_NAME      = os.environ.get("BOT_NAME", "HermesBot")
+MEMORY_ENABLED = os.environ.get("MEMORY_ENABLED", "true").lower() == "true"
+MAX_CONTEXT   = int(os.environ.get("MAX_CONTEXT_MESSAGES", "20"))
+
+MEMORY_FILE   = Path("memory/MEMORY.md")
+SKILLS_DIR    = Path("skills")
+
+DEFAULT_SYSTEM_PROMPT = os.environ.get(
+    "SYSTEM_PROMPT",
+    f"You are {BOT_NAME}, a helpful AI assistant. Be concise, accurate and friendly."
 )
 
-BASE_DIR = Path(__file__).parent.parent
-MEMORY_FILE = BASE_DIR / "memory" / "MEMORY.md"
-SKILLS_DIR  = BASE_DIR / "skills"
-MEMORY_FILE.parent.mkdir(exist_ok=True)
-SKILLS_DIR.mkdir(exist_ok=True)
+# ─── Memorija ─────────────────────────────────────────────────────────────────
 
-# ── SUPABASE (optional, graceful fallback) ────────────────────────
-try:
-    from hermes_core import supabase_sync as _sb
-    _SUPABASE = True
-except ImportError:
-    _SUPABASE = False
-
-# ── CONFIG ────────────────────────────────────────────────────────
-def get_cfg():
-    return {
-        "ollama_host":    os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
-        "hf_model":       os.environ.get("HF_MODEL", "bartowski/Llama-3.2-1B-Instruct-GGUF"),
-        "hf_quant":       os.environ.get("HF_QUANT", "Q4_K_M"),
-        "hf_space_base_url": os.environ.get("HF_SPACE_BASE_URL", "").strip(),
-        "hf_space_api_key": os.environ.get("HF_SPACE_API_KEY", "").strip(),
-        "hf_space_model": os.environ.get("HF_SPACE_MODEL", "").strip(),
-        "system_prompt":  os.environ.get("SYSTEM_PROMPT",
-            "You are Hermes, a self-improving AI assistant. Be precise, helpful, and concise."),
-        "bot_name":       os.environ.get("BOT_NAME", "Hermes"),
-        "telegram_token": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
-        "discord_token":  os.environ.get("DISCORD_BOT_TOKEN", ""),
-        "hf_ssh_key":     os.environ.get("HF_SSH_KEY", ""),
-        "memory_enabled": os.environ.get("MEMORY_ENABLED", "true").lower() == "true",
-        "max_context":    int(os.environ.get("MAX_CONTEXT_MESSAGES", "20")),
-    }
-
-def model_tag(cfg: dict) -> str:
-    """Build hf.co/user/repo:quant tag for Ollama."""
-    model = cfg["hf_model"].strip()
-    quant = cfg["hf_quant"].strip()
-    if not model.startswith("hf.co/") and not model.startswith("huggingface.co/"):
-        model = f"hf.co/{model}"
-    return f"{model}:{quant}" if quant else model
-
-# ── MEMORY ────────────────────────────────────────────────────────
 def load_memory() -> str:
+    if not MEMORY_ENABLED:
+        return ""
+    MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     if MEMORY_FILE.exists():
-        return MEMORY_FILE.read_text()
+        return MEMORY_FILE.read_text(encoding="utf-8")
     return ""
 
-def save_memory(content: str):
-    MEMORY_FILE.write_text(content)
-    if _SUPABASE:
-        try: _sb.push_memory()
-        except: pass
 
-def append_memory(note: str):
-    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    existing = load_memory()
-    entry = f"\n- [{ts}] {note}"
-    save_memory(existing + entry)
+def save_memory(content: str) -> None:
+    if not MEMORY_ENABLED:
+        return
+    MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    MEMORY_FILE.write_text(content, encoding="utf-8")
 
-# ── SKILLS ────────────────────────────────────────────────────────
+
+def remember(key: str, value: str) -> str:
+    memory = load_memory()
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    entry = f"\n- [{timestamp}] **{key}**: {value}"
+    if key in memory:
+        # Ažuriraj postojeći
+        lines = memory.splitlines()
+        new_lines = []
+        for line in lines:
+            if f"**{key}**" in line:
+                new_lines.append(entry.strip())
+            else:
+                new_lines.append(line)
+        save_memory("\n".join(new_lines))
+    else:
+        save_memory(memory + entry)
+    return f"✅ Zapamtio sam: **{key}** = {value}"
+
+
+def recall_memory(query: str = "") -> str:
+    memory = load_memory()
+    if not memory:
+        return "Memorija je prazna."
+    if query:
+        lines = [l for l in memory.splitlines() if query.lower() in l.lower()]
+        return "\n".join(lines) if lines else f"Ništa pronađeno za '{query}'."
+    return memory
+
+# ─── Skillovi ─────────────────────────────────────────────────────────────────
+
 def list_skills() -> list[dict]:
     skills = []
-    for f in SKILLS_DIR.glob("*.md"):
-        content = f.read_text()
-        first_line = content.split("\n")[0].lstrip("#").strip()
-        skills.append({"name": f.stem, "title": first_line, "content": content})
+    if not SKILLS_DIR.exists():
+        return skills
+    for skill_file in SKILLS_DIR.rglob("SKILL.md"):
+        name = skill_file.parent.name
+        description = _extract_skill_description(skill_file)
+        skills.append({"name": name, "path": str(skill_file), "description": description})
     return skills
 
-def get_skill(name: str) -> Optional[str]:
-    path = SKILLS_DIR / f"{name}.md"
-    return path.read_text() if path.exists() else None
 
-def save_skill(name: str, content: str):
-    path = SKILLS_DIR / f"{name}.md"
-    path.write_text(content)
-    if _SUPABASE:
-        try: _sb.push_skills()
-        except: pass
+def load_skill(name: str) -> Optional[str]:
+    direct = SKILLS_DIR / name / "SKILL.md"
+    if direct.exists():
+        return direct.read_text(encoding="utf-8")
+    for f in SKILLS_DIR.rglob("SKILL.md"):
+        if f.parent.name.lower() == name.lower():
+            return f.read_text(encoding="utf-8")
+    return None
 
-# ── TOOLS ─────────────────────────────────────────────────────────
+
+def save_skill_file(name: str, content: str) -> bool:
+    try:
+        skill_dir = SKILLS_DIR / name
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+        return True
+    except Exception as e:
+        print(f"[agent] Greška pri čuvanju skilla: {e}")
+        return False
+
+
+def detect_relevant_skills(message: str) -> list[str]:
+    import re
+    triggered = []
+    msg_lower = message.lower()
+    stop = {"the","a","an","is","are","use","when","this","that","with","for","and","or","to","in","on","at","of"}
+    for skill in list_skills():
+        name = skill["name"].lower()
+        desc = skill["description"].lower()
+        if name in msg_lower:
+            triggered.append(skill["name"])
+            continue
+        keywords = [w for w in re.findall(r'\b[a-z]{3,}\b', desc) if w not in stop]
+        if any(kw in msg_lower for kw in keywords):
+            triggered.append(skill["name"])
+    return triggered
+
+
+def build_skill_context(skill_names: list[str]) -> str:
+    if not skill_names:
+        return ""
+    parts = ["=== ACTIVE SKILLS ===\n"]
+    for name in skill_names:
+        content = load_skill(name)
+        if content:
+            parts.append(f"--- SKILL: {name} ---\n{content}\n")
+    return "\n".join(parts)
+
+
+def _extract_skill_description(skill_file: Path) -> str:
+    import re
+    try:
+        content = skill_file.read_text(encoding="utf-8")
+        m = re.search(r'description:\s*["\']?(.+?)["\']?\s*\n', content)
+        if m:
+            return m.group(1).strip()
+        for line in content.splitlines():
+            line = line.strip()
+            if line and not line.startswith(("---", "#")):
+                return line[:200]
+    except Exception:
+        pass
+    return ""
+
+# ─── Toolovi ──────────────────────────────────────────────────────────────────
+
 TOOLS = [
     {
-        "type": "function",
-        "function": {
-            "name": "remember",
-            "description": "Save an important note to persistent memory for future sessions.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "note": {"type": "string", "description": "The note to remember"}
-                },
-                "required": ["note"]
-            }
-        }
+        "name": "remember",
+        "description": "Pamti informaciju u dugoročnu memoriju",
+        "args": {"key": "string", "value": "string"}
     },
     {
-        "type": "function",
-        "function": {
-            "name": "recall_memory",
-            "description": "Read all saved memories.",
-            "parameters": {"type": "object", "properties": {}}
-        }
+        "name": "recall_memory",
+        "description": "Pretraži dugoročnu memoriju",
+        "args": {"query": "string (opciono)"}
     },
     {
-        "type": "function",
-        "function": {
-            "name": "list_skills",
-            "description": "List all available skills/procedures.",
-            "parameters": {"type": "object", "properties": {}}
-        }
+        "name": "list_skills",
+        "description": "Listaj dostupne skillove",
+        "args": {}
     },
     {
-        "type": "function",
-        "function": {
-            "name": "create_skill",
-            "description": "Create or update a skill/procedure for future use.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name":    {"type": "string"},
-                    "content": {"type": "string", "description": "Markdown content describing the skill"}
-                },
-                "required": ["name", "content"]
-            }
-        }
+        "name": "read_skill",
+        "description": "Pročitaj sadržaj skilla",
+        "args": {"name": "string"}
     },
     {
-        "type": "function",
-        "function": {
-            "name": "read_skill",
-            "description": "Read the content of a SKILL.md skill pack by name.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                },
-                "required": ["name"]
-            }
-        }
+        "name": "save_skill",
+        "description": "Sačuvaj novi skill",
+        "args": {"name": "string", "content": "string"}
     },
     {
-        "type": "function",
-        "function": {
-            "name": "ollama_status",
-            "description": "Check Ollama connection and list available local models.",
-            "parameters": {"type": "object", "properties": {}}
-        }
+        "name": "ollama_status",
+        "description": "Provjeri status Ollama servisa i dostupnih modela",
+        "args": {}
     },
     {
-        "type": "function",
-        "function": {
-            "name": "pull_model",
-            "description": "Pull/download an Ollama model (supports hf.co/user/repo:quant format).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "model": {"type": "string", "description": "Model tag e.g. hf.co/bartowski/Llama-3.2-1B-Instruct-GGUF:Q4_K_M"}
-                },
-                "required": ["model"]
-            }
-        }
-    }
+        "name": "pull_model",
+        "description": "Preuzmi Ollama model",
+        "args": {"model": "string"}
+    },
 ]
 
-def execute_tool(name: str, args: dict, cfg: dict) -> str:
-    host = cfg["ollama_host"].rstrip("/")
-    if name == "remember":
-        append_memory(args.get("note", ""))
-        return f"✅ Saved to memory: {args.get('note','')}"
-    elif name == "recall_memory":
-        mem = load_memory()
-        return mem if mem else "No memories yet."
-    elif name == "list_skills":
+
+def execute_tool(tool_name: str, args: dict) -> str:
+    """Izvrši tool i vrati rezultat kao string."""
+    
+    if tool_name == "remember":
+        return remember(args.get("key", "info"), args.get("value", ""))
+
+    elif tool_name == "recall_memory":
+        return recall_memory(args.get("query", ""))
+
+    elif tool_name == "list_skills":
         skills = list_skills()
-        packed_skills = list_available_skills()
-        if not skills and not packed_skills:
-            return "No skills yet."
-        lines = [f"- **{s['name']}**: {s['title']}" for s in skills]
-        lines.extend(f"- **{s['name']}**: {s.get('description','')}" for s in packed_skills)
+        if not skills:
+            return "Nema dostupnih skillova. Dodaj .md fajlove u skills/ folder."
+        lines = ["**Dostupni skillovi:**\n"]
+        for s in skills:
+            lines.append(f"• **{s['name']}**: {s['description']}")
         return "\n".join(lines)
-    elif name == "read_skill":
-        requested = (args.get("name") or "").strip()
-        if not requested:
-            return "❌ Missing skill name."
-        content = load_skill_markdown_pack(requested)
-        if not content:
-            return f"Skill '{requested}' nije pronađen."
-        return f"Sadržaj skilla '{requested}':\n\n{content}"
-    elif name == "create_skill":
-        save_skill(args["name"], args["content"])
-        save_skill_markdown_pack(args["name"], args["content"])
-        return f"✅ Skill '{args['name']}' saved."
-    elif name == "ollama_status":
+
+    elif tool_name == "read_skill":
+        name = args.get("name", "")
+        content = load_skill(name)
+        return content if content else f"Skill '{name}' nije pronađen."
+
+    elif tool_name == "save_skill":
+        name = args.get("name", "")
+        content = args.get("content", "")
+        if save_skill_file(name, content):
+            return f"✅ Skill '{name}' sačuvan u skills/{name}/SKILL.md"
+        return f"❌ Greška pri čuvanju skilla '{name}'."
+
+    elif tool_name == "ollama_status":
         try:
-            resp = httpx.get(f"{host}/api/tags", timeout=5)
-            models = [m["name"] for m in resp.json().get("models", [])]
-            return f"✅ Ollama online at {host}\nModels: {', '.join(models) if models else 'none pulled yet'}"
+            resp = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=5)
+            if resp.status_code == 200:
+                models = [m["name"] for m in resp.json().get("models", [])]
+                return f"✅ Ollama aktivan.\nModeli: {', '.join(models) if models else 'nema'}"
+            return f"⚠️ Ollama odgovorio sa statusom {resp.status_code}"
         except Exception as e:
-            return f"❌ Ollama unreachable at {host}: {e}"
-    elif name == "pull_model":
+            return f"❌ Ollama nije dostupan: {e}"
+
+    elif tool_name == "pull_model":
+        model = args.get("model", "")
         try:
-            model = args.get("model", model_tag(cfg))
-            resp = httpx.post(f"{host}/api/pull", json={"name": model}, timeout=300)
-            return f"✅ Pull initiated for {model}"
+            resp = requests.post(
+                f"{OLLAMA_HOST}/api/pull",
+                json={"name": model},
+                timeout=300,
+                stream=True
+            )
+            lines = []
+            for line in resp.iter_lines():
+                if line:
+                    data = json.loads(line)
+                    if "status" in data:
+                        lines.append(data["status"])
+            return "\n".join(lines[-5:]) if lines else "Model pull završen."
         except Exception as e:
-            return f"❌ Pull failed: {e}"
-    return f"Unknown tool: {name}"
+            return f"❌ Greška: {e}"
 
-# ── SYSTEM PROMPT builder ─────────────────────────────────────────
-def build_system(cfg: dict, user_message: str = "") -> str:
-    mem = load_memory()
-    skills = list_skills()
-    skill_list = "\n".join(f"- {s['name']}: {s['title']}" for s in skills) or "none yet"
-    memory_block = f"\n\n## Your Memory\n{mem}" if mem else ""
-    base_prompt = f"""{cfg['system_prompt']}
-
-## Available Tools
-You have tools: remember, recall_memory, list_skills, create_skill, read_skill, ollama_status, pull_model.
-Call them when appropriate by emitting a JSON tool_call block.
-
-## Skills
-{skill_list}{memory_block}
-
-## Current Model
-{model_tag(cfg)}
-
-## Date
-{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
-"""
-    relevant_skills = set(detect_relevant_skills(user_message or ""))
-    active_skills = set(get_active_skills())
-    skill_context = build_skill_context(sorted(relevant_skills | active_skills))
-    return inject_skills_into_system_prompt(base_prompt, skill_context)
+    return f"❌ Nepoznati tool: '{tool_name}'"
 
 
-def _chat_via_hf_space(messages: list, cfg: dict) -> Iterator[str]:
-    base_url = (cfg.get("hf_space_base_url") or "").rstrip("/")
-    if not base_url:
-        yield f"data: {json.dumps({'error': 'Ollama nedostupan, a HF_SPACE_BASE_URL nije postavljen.', 'done': True})}\n\n"
-        return
+def parse_tool_call(text: str) -> Optional[tuple[str, dict]]:
+    """
+    Parsira tool poziv iz LLM odgovora.
+    Podržava formate:
+      <tool>remember</tool><args>{"key":"x","value":"y"}</args>
+      [TOOL: remember] {"key":"x","value":"y"}
+    """
+    import re
 
-    endpoint = f"{base_url}/v1/chat/completions"
-    latest_user = ""
-    for m in reversed(messages):
-        if m.get("role") == "user":
-            latest_user = m.get("content", "")
-            break
-    system = build_system(cfg, latest_user)
-    model = cfg.get("hf_space_model") or "default"
-    headers = {"Content-Type": "application/json"}
-    if cfg.get("hf_space_api_key"):
-        headers["Authorization"] = f"Bearer {cfg['hf_space_api_key']}"
+    # Format 1: XML-like
+    m = re.search(r'<tool>(.*?)</tool>\s*<args>(.*?)</args>', text, re.DOTALL)
+    if m:
+        tool_name = m.group(1).strip()
+        try:
+            args = json.loads(m.group(2).strip())
+        except Exception:
+            args = {}
+        return tool_name, args
 
+    # Format 2: [TOOL: name] {...}
+    m = re.search(r'\[TOOL:\s*(\w+)\]\s*(\{.*?\})?', text, re.DOTALL)
+    if m:
+        tool_name = m.group(1).strip()
+        try:
+            args = json.loads(m.group(2) or "{}")
+        except Exception:
+            args = {}
+        return tool_name, args
+
+    return None
+
+# ─── Backend: Ollama ──────────────────────────────────────────────────────────
+
+def _ollama_available() -> bool:
+    try:
+        r = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=3)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _call_ollama_stream(messages: list, model: str) -> Generator[str, None, None]:
     payload = {
         "model": model,
-        "messages": [{"role": "system", "content": system}] + messages[-cfg["max_context"]:]
+        "messages": messages,
+        "stream": True
     }
+    with requests.post(
+        f"{OLLAMA_HOST}/api/chat",
+        json=payload,
+        stream=True,
+        timeout=120
+    ) as resp:
+        resp.raise_for_status()
+        for line in resp.iter_lines():
+            if line:
+                data = json.loads(line)
+                if "message" in data:
+                    chunk = data["message"].get("content", "")
+                    if chunk:
+                        yield chunk
+                if data.get("done"):
+                    break
 
-    try:
-        resp = httpx.post(endpoint, json=payload, headers=headers, timeout=120)
-        if resp.status_code != 200:
-            body = resp.text[:500]
-            yield f"data: {json.dumps({'error': f'HF Space {resp.status_code}: {body}', 'done': True})}\n\n"
-            return
 
-        data = resp.json()
-        content = ((data.get("choices") or [{}])[0].get("message") or {}).get("content", "")
-        if content:
-            yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
-        yield f"data: {json.dumps({'done': True})}\n\n"
-    except Exception as e:
-        yield f"data: {json.dumps({'error': f'HF Space fallback error: {e}', 'done': True})}\n\n"
+def _call_ollama_sync(messages: list, model: str) -> str:
+    payload = {"model": model, "messages": messages, "stream": False}
+    resp = requests.post(f"{OLLAMA_HOST}/api/chat", json=payload, timeout=120)
+    resp.raise_for_status()
+    return resp.json()["message"]["content"]
 
-# ── OLLAMA STREAMING CHAT ─────────────────────────────────────────
-def chat_stream(messages: list, cfg: dict) -> Iterator[str]:
-    """Stream chat response from Ollama, handling tool calls."""
-    host = cfg["ollama_host"].rstrip("/")
-    tag  = model_tag(cfg)
-    latest_user = ""
-    for m in reversed(messages):
-        if m.get("role") == "user":
-            latest_user = m.get("content", "")
-            break
-    system = build_system(cfg, latest_user)
+# ─── Backend: HuggingFace Inference API ───────────────────────────────────────
 
+def _format_gemma_prompt(messages: list) -> str:
+    """Formatira messages u Gemma chat format."""
+    prompt = ""
+    for msg in messages:
+        role = msg["role"]
+        content = msg["content"]
+        if role == "system":
+            prompt += f"<start_of_turn>system\n{content}<end_of_turn>\n"
+        elif role == "user":
+            prompt += f"<start_of_turn>user\n{content}<end_of_turn>\n"
+        elif role == "assistant":
+            prompt += f"<start_of_turn>model\n{content}<end_of_turn>\n"
+    prompt += "<start_of_turn>model\n"
+    return prompt
+
+
+def _call_hf_api(messages: list) -> str:
+    if not HF_TOKEN:
+        raise Exception("HF_TOKEN nije postavljen.")
+    
+    hf_url = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+    prompt = _format_gemma_prompt(messages)
+    
     payload = {
-        "model": tag,
-        "messages": [{"role": "system", "content": system}] + messages[-cfg["max_context"]:],
-        "stream": True,
-        "tools": TOOLS,
+        "inputs": prompt,
+        "parameters": {
+            "max_new_tokens": 512,
+            "temperature": 0.7,
+            "do_sample": True,
+            "return_full_text": False
+        }
     }
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    resp = requests.post(hf_url, headers=headers, json=payload, timeout=60)
+    
+    if resp.status_code == 503:
+        # Model se učitava
+        raise Exception("Model se učitava na HF serveru, pokušaj za 20-30 sekundi.")
+    
+    resp.raise_for_status()
+    result = resp.json()
+    
+    if isinstance(result, list) and result:
+        return result[0].get("generated_text", "")
+    return str(result)
 
+# ─── Glavni Chat Engine ───────────────────────────────────────────────────────
+
+def build_system_prompt(user_message: str) -> str:
+    """Gradi system prompt sa skill kontekstom i memorijom."""
+    base = DEFAULT_SYSTEM_PROMPT
+    
+    # Dodaj memoriju
+    memory = load_memory()
+    if memory:
+        base += f"\n\n=== MEMORIJA ===\n{memory}"
+    
+    # Dodaj tool instrukcije
+    tool_list = "\n".join([
+        f"- {t['name']}({', '.join(f'{k}: {v}' for k,v in t['args'].items())}): {t['description']}"
+        for t in TOOLS
+    ])
+    base += f"""
+
+=== DOSTUPNI TOOLOVI ===
+Kada trebaš koristiti tool, odgovori u formatu:
+<tool>naziv_toola</tool><args>{{"key": "value"}}</args>
+
+{tool_list}
+
+Nakon tool poziva, sačekaj rezultat i nastavi odgovor.
+"""
+    
+    # Dodaj skill kontekst
+    relevant = detect_relevant_skills(user_message)
+    if relevant:
+        skill_ctx = build_skill_context(relevant)
+        base += f"\n\n{skill_ctx}"
+    
+    return base
+
+
+def chat_stream(
+    user_message: str,
+    history: list[dict],
+    model: Optional[str] = None
+) -> Generator[str, None, None]:
+    """
+    Glavna chat funkcija — vraća generator chunkova teksta.
+    
+    Args:
+        user_message: Poruka korisnika
+        history: Lista prethodnih poruka [{"role": "user/assistant", "content": "..."}]
+        model: Ollama model (opciono, koristi OLLAMA_MODEL ako nije specificirano)
+    
+    Yields:
+        str: Chunk odgovora
+    """
+    active_model = model or OLLAMA_MODEL
+    system_prompt = build_system_prompt(user_message)
+    
+    # Gradi messages listu
+    messages = [{"role": "system", "content": system_prompt}]
+    messages += history[-MAX_CONTEXT:]
+    messages.append({"role": "user", "content": user_message})
+    
+    full_response = ""
+    
     try:
-        with httpx.Client(timeout=120) as client:
-            # Push incoming user message to Supabase
-            if _SUPABASE and messages:
-                last = messages[-1]
-                try: _sb.push_message(last.get("role","user"), last.get("content",""))
-                except: pass
-
-            with client.stream("POST", f"{host}/api/chat", json=payload) as resp:
-                if resp.status_code != 200:
-                    resp.read()
-                    body = resp.text
-                    yield f"data: {json.dumps({'error': f'Ollama {resp.status_code}: {body}', 'done': True})}\n\n"
-                    return
-
-                tool_calls_buffer = []
-                full_content = ""
-                last_user_text = ""
-                for m in reversed(messages):
-                    if m.get("role") == "user":
-                        last_user_text = (m.get("content") or "").lower()
-                        break
-
-                for line in resp.iter_lines():
-                    if not line:
-                        continue
-                    try:
-                        obj = json.loads(line)
-                    except:
-                        continue
-
-                    msg = obj.get("message", {})
-                    content = msg.get("content", "")
-                    tool_calls = msg.get("tool_calls", [])
-                    done = obj.get("done", False)
-
-                    if content:
-                        full_content += content
-                        yield f"data: {json.dumps({'content': content, 'done': False})}\n\n"
-
-                    if tool_calls:
-                        tool_calls_buffer.extend(tool_calls)
-
-                    if done:
-                        # Push assistant reply to Supabase
-                        if _SUPABASE and full_content:
-                            try: _sb.push_message("assistant", full_content)
-                            except: pass
-
-                        # Execute any tool calls
-                        if tool_calls_buffer:
-                            for tc in tool_calls_buffer:
-                                fn   = tc.get("function", {})
-                                name = fn.get("name", "")
-                                args = fn.get("arguments", {})
-                                if isinstance(args, str):
-                                    try: args = json.loads(args)
-                                    except: args = {}
-                                yield f"data: {json.dumps({'tool_call': name, 'args': args, 'done': False})}\n\n"
-                                # Safety gate: skupe/strukturne alate dozvoli samo kad ih korisnik eksplicitno traži
-                                if name == "pull_model" and not any(k in last_user_text for k in ["pull_model", "/pull_model", "povuci model", "instaliraj model", "download model"]):
-                                    result = "⛔ pull_model blokiran: korisnik nije eksplicitno tražio instalaciju modela."
-                                elif name == "create_skill" and not any(k in last_user_text for k in ["create_skill", "/create_skill", "napravi skill", "kreiraj skill", "update skill", "azuriraj skill"]):
-                                    result = "⛔ create_skill blokiran: korisnik nije eksplicitno tražio kreiranje/izmjenu skilla."
-                                else:
-                                    result = execute_tool(name, args, cfg)
-                                yield f"data: {json.dumps({'tool_result': result, 'tool': name, 'done': False})}\n\n"
-
-                            # Auto-save memory if long conversation
-                            if cfg["memory_enabled"] and len(messages) > 10 and len(messages) % 10 == 0:
-                                append_memory(f"Conversation checkpoint at {len(messages)} messages")
-
-                        yield f"data: {json.dumps({'done': True})}\n\n"
-                        return
-
-    except httpx.ConnectError:
-        # Fallback: ako je podešen HF Space endpoint, nastavi tamo bez izmjene frontenda.
-        yield from _chat_via_hf_space(messages, cfg)
+        if _ollama_available():
+            print(f"[HermesBot] Koristim Ollama ({active_model})")
+            for chunk in _call_ollama_stream(messages, active_model):
+                full_response += chunk
+                yield chunk
+        else:
+            print("[HermesBot] Ollama nedostupan, koristim HF API...")
+            response = _call_hf_api(messages)
+            full_response = response
+            # Simuliraj streaming za konzistentnost
+            words = response.split(" ")
+            for i, word in enumerate(words):
+                chunk = word + (" " if i < len(words) - 1 else "")
+                yield chunk
+    
     except Exception as e:
-        yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
+        error_msg = f"\n\n❌ Greška: {str(e)}"
+        yield error_msg
+        return
+    
+    # Provjeri ima li tool poziva u odgovoru
+    tool_call = parse_tool_call(full_response)
+    if tool_call:
+        tool_name, tool_args = tool_call
+        print(f"[HermesBot] Tool poziv: {tool_name}({tool_args})")
+        tool_result = execute_tool(tool_name, tool_args)
+        yield f"\n\n**Tool rezultat:**\n{tool_result}"
 
-# ── OLLAMA HELPERS ────────────────────────────────────────────────
-def ollama_list_models(host: str) -> list:
-    try:
-        resp = httpx.get(f"{host.rstrip('/')}/api/tags", timeout=5)
-        return resp.json().get("models", [])
-    except:
-        return []
 
-def ollama_pull_stream(model: str, host: str) -> Iterator[str]:
+def chat_sync(
+    user_message: str,
+    history: list[dict],
+    model: Optional[str] = None
+) -> str:
+    """Sync verzija chat funkcije (za Telegram/Discord)."""
+    active_model = model or OLLAMA_MODEL
+    system_prompt = build_system_prompt(user_message)
+    
+    messages = [{"role": "system", "content": system_prompt}]
+    messages += history[-MAX_CONTEXT:]
+    messages.append({"role": "user", "content": user_message})
+    
     try:
-        with httpx.Client(timeout=600) as client:
-            with client.stream("POST", f"{host.rstrip('/')}/api/pull",
-                               json={"name": model}) as resp:
-                for line in resp.iter_lines():
-                    if line:
-                        yield f"data: {line}\n\n"
+        if _ollama_available():
+            response = _call_ollama_sync(messages, active_model)
+        else:
+            response = _call_hf_api(messages)
     except Exception as e:
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        return f"❌ Greška: {str(e)}"
+    
+    # Provjeri tool pozive
+    tool_call = parse_tool_call(response)
+    if tool_call:
+        tool_name, tool_args = tool_call
+        tool_result = execute_tool(tool_name, tool_args)
+        response += f"\n\n**Tool rezultat:**\n{tool_result}"
+    
+    return response
 
-def ollama_delete_model(model: str, host: str) -> dict:
-    try:
-        resp = httpx.delete(f"{host.rstrip('/')}/api/delete", json={"name": model}, timeout=10)
-        return {"ok": resp.status_code == 200}
-    except Exception as e:
-        return {"error": str(e)}
+
+# ─── Status ───────────────────────────────────────────────────────────────────
+
+def get_status() -> dict:
+    """Vrati status svih servisa."""
+    ollama_ok = _ollama_available()
+    hf_ok = bool(HF_TOKEN)
+    
+    models = []
+    if ollama_ok:
+        try:
+            resp = requests.get(f"{OLLAMA_HOST}/api/tags", timeout=3)
+            models = [m["name"] for m in resp.json().get("models", [])]
+        except Exception:
+            pass
+    
+    return {
+        "ollama": {"available": ollama_ok, "host": OLLAMA_HOST, "models": models},
+        "hf_api": {"available": hf_ok, "model": HF_MODEL},
+        "memory": {"enabled": MEMORY_ENABLED, "file": str(MEMORY_FILE)},
+        "skills": {"count": len(list_skills()), "dir": str(SKILLS_DIR)},
+        "bot_name": BOT_NAME,
+    }
